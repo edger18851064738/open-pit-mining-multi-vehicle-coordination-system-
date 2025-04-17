@@ -1,0 +1,103 @@
+graph TD
+    DS[DispatchSystem] --> TS[TransportScheduler]
+    DS --> CBS[ConflictBasedSearch]
+    DS --> MV[MiningVehicle]
+    DS --> TT[TransportTask]
+    CBS --> HP[HybridPathPlanner]
+    HP --> MS[MapService]
+    HP --> GU[GeoUtils]
+    HP --> PT[PathProcessor]
+    MV --> GU
+    TT --> GU
+
+### 1. 调度核心模块 (dispatch_service.py)
+`DispatchSystem`
+
+```python
+class DispatchSystem:
+    """中央调度控制器"""
+    # 主要接口
+    scheduling_cycle()    # 调度主循环
+    dispatch_vehicle_to() # 手动调度接口
+    print_ascii_map()     # 系统状态可视化
+ ```
+
+### 2. 车辆模型 (vehicle.py)
+`MiningVehicle`
+
+```python
+class MiningVehicle:
+    """矿车实体模型"""
+    # 关键状态机
+    assign_task()   # 任务接收接口
+    update_position() # 位置更新
+    complete_task()  # 任务完成处理
+ ```
+
+### 3. 任务系统 (task.py)
+`TransportTask`
+
+```python
+class TransportTask:
+    """运输任务元数据"""
+    # 核心验证
+    validate_task()  # 任务可行性校验
+ ```
+
+### 4. 路径规划层 (path_planner.py)
+`HybridPathPlanner`
+
+```python
+class HybridPathPlanner:
+    """混合路径规划器"""
+    plan_path()     # A*+Dijkstra主算法
+    smooth_path()   # 路径优化接口
+ ```
+
+### 5. 地图服务 (map_service.py)
+`MapService`
+
+```python
+class MapService:
+    """动态地图管理"""
+    plan_path()         # 常规路径规划 
+    plan_return_path()  # 返程路径生成
+    update_obstacles()  # 实时障碍物更新
+ ```
+
+### 6. 地理工具 (geo_tools.py)
+`GeoUtils`
+
+```python
+class GeoUtils:
+    """地理计算引擎"""
+    haversine()     # 精确距离计算
+    convert_coords() # 坐标系转换
+ ```
+
+### 7. 路径优化 (path_tools.py)
+`PathProcessor`
+
+```python
+class PathProcessor:
+    """路径后处理器"""
+    bezier_smoothing()  # 贝塞尔曲线优化
+ ```
+
+### 关键接口交互流程
+```mermaid
+sequenceDiagram
+    participant D as DispatchSystem
+    participant S as Scheduler
+    participant V as Vehicle
+    participant T as Task
+    participant P as PathPlanner
+    
+    D->>S: 获取调度策略
+    S->>V: 查询车辆状态
+    S->>T: 验证任务可行性
+    T->>P: 请求路径规划
+    P->>D: 返回路径结果
+    D->>V: 分配任务
+    V->>D: 上报完成状态
+ ```

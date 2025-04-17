@@ -1,0 +1,1 @@
+# open-pit-mining-multi-vehicle-coordination-system-

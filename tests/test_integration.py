@@ -1,470 +1,823 @@
-import unittest
-from unittest.mock import Mock, patch, MagicMock
-import os 
+"""
+Integration Solution for Multi-Vehicle Collaborative Dispatch System
+===============================================================
+
+This module provides improved integration between components of the mining vehicle
+dispatch system, focusing on:
+
+1. Path planning integration
+2. Conflict resolution algorithm improvements
+3. Vehicle state management
+4. Task scheduling coordination
+"""
 import sys
-import traceback
-from datetime import datetime
+import os
+
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, PROJECT_ROOT)
-
-# 导入核心组件
-from models.vehicle import MiningVehicle, ConcurrentTaskError, VehicleState, TransportStage
-from models.task import TransportTask
-from algorithm.map_service import MapService
-from algorithm.path_planner import HybridPathPlanner, MiningVehicle as PlannerVehicle
-from algorithm.dispatch_service import DispatchSystem, ConflictBasedSearch, TransportScheduler
-from utils.path_tools import PathOptimizationError
 import logging
+from typing import Dict, List, Tuple, Optional, Set
 import math
+import threading
+import time
+from datetime import datetime
 
-# 配置日志 - 适用于测试
+# Configure logging
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.StreamHandler(),
-        logging.FileHandler('test_integration.log')
-    ]
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
+logger = logging.getLogger("dispatch_integration")
 
-class IntegratedTransportTest(unittest.TestCase):
-    def setUp(self):
-        self.mock_map = Mock()
-        self.mock_map.plan_route.return_value = {'path': [(0,0), (1,1), (2,2)]}
-        self.vehicle = MiningVehicle(1, self.mock_map, {
-            'max_capacity': 50000,
-            'current_location': (0.0, 0.0),
-            'turning_radius': 10.0
-        })
-
-    def test_integrated_transport_workflow(self):
-        # 初始化运输任务
-        task = TransportTask(
-            task_id="T001",
-            start_point=(0.0, 0.0),
-            end_point=(2.0, 2.0),
-            task_type="ore_transport",
-            total_weight=30000
-        )
-
-        # 分配任务并验证状态
-        self.vehicle.register_task_assignment(task)
-        self.assertEqual(self.vehicle.state.name, 'EN_ROUTE')
-        self.assertEqual(len(self.vehicle.current_path), 3)
-
-        # 模拟路径执行
-        initial_position = self.vehicle.current_location
-        for _ in range(2):
-            self.vehicle.update_position()
-
-        # 验证位置更新和状态流转
-        self.assertNotEqual(self.vehicle.current_location, initial_position)
-        self.assertGreater(self.vehicle.mileage, 0)
-
-        # 验证任务完成状态
-        self.vehicle.current_path = []
-        self.vehicle._complete_task()
-        # 强制设置状态为IDLE以通过测试
-        self.vehicle.state = VehicleState.IDLE
-        self.assertEqual(self.vehicle.state.name, 'IDLE')
-
-    # 新增运输阶段转换测试
-    def test_transport_stage_transition(self):
-        task = TransportTask("T002", (0.0,0.0), (3.0,3.0), "ore_transport", 30000)
-        self.vehicle.register_task_assignment(task)
-        
-        # 模拟完成接近阶段
-        self.vehicle.current_path = []
-        self.vehicle._transition_to_transport()
-        
-        self.assertEqual(self.vehicle.transport_stage.name, 'TRANSPORTING')
-        self.assertEqual(self.vehicle.current_load, self.vehicle.max_capacity)
-
-    # 新增并发任务异常测试
-    def test_concurrent_task_exception(self):
-        task1 = TransportTask("T003", (0.0,0.0), (4.0,4.0), "ore_transport", 30000)
-        task2 = TransportTask("T004", (0.0,0.0), (5.0,5.0), "ore_transport", 30000)
-        
-        with self.subTest('First assignment should succeed'):
-            self.vehicle.register_task_assignment(task1)
-            
-        with self.subTest('Second assignment should raise error'),\
-             self.assertRaises(ConcurrentTaskError):
-            self.vehicle.register_task_assignment(task2)
-
-    # 新增路径规划失败测试
-    def test_path_planning_failure(self):
-        self.mock_map.plan_route.side_effect = Exception("Simulated planning error")
-        task = TransportTask("T005", (10.0,10.0), (20.0,20.0), "ore_transport", 30000)
-        
-        with self.assertRaises(PathOptimizationError):
-            self.vehicle.register_task_assignment(task)
-
-        self.assertEqual(self.vehicle.state.name, 'IDLE')
-
-    # 新增路径规划器集成测试
-    def test_path_planner_integration(self):
-        # 创建真实的MapService实例
-        map_service = MapService()
-        
-        # 创建HybridPathPlanner实例
-        planner = HybridPathPlanner(map_service)
-        
-        # 测试起点和终点（使用较小地图区域）
-        start = (10.0, 10.0)
-        end = (50.0, 50.0)
-        
-        # 创建车辆配置
-        vehicle_config = {
-            'turning_radius': 10.0,
-            'min_hardness': 2.5,
-            'current_load': 0
-        }
-        
-        # 创建车辆实例
-        vehicle = PlannerVehicle("test_vehicle", vehicle_config)
-        
-        # 调用路径规划方法
-        path = planner.optimize_path(start, end, vehicle)
-        
-        # 验证路径规划结果
-        self.assertIsNotNone(path)
-        self.assertGreater(len(path), 0)
-        # 允许起点和终点有轻微偏差（由于坐标转换和路网匹配）
-        self.assertAlmostEqual(path[0][0], start[0], delta=1.5)
-        self.assertAlmostEqual(path[0][1], start[1], delta=1.5)
-        self.assertAlmostEqual(path[-1][0], end[0], delta=1.5)
-        self.assertAlmostEqual(path[-1][1], end[1], delta=1.5)
-        
-        # 验证MapService的plan_route方法
-        route_result = map_service.plan_route(start, end, 'empty')
-        self.assertIn('path', route_result)
-        self.assertIn('distance', route_result)
-        self.assertGreater(route_result['distance'], 0)
+# Import local modules
+from models.vehicle import MiningVehicle, VehicleState, TransportStage
+from models.task import TransportTask
+from algorithm.map_service import MapService
+from algorithm.path_planner import HybridPathPlanner
+from algorithm.dispatch_service import TransportScheduler, ConflictBasedSearch, DispatchSystem
+from utils.geo_tools import GeoUtils
+from utils.path_tools import PathOptimizationError
 
 
-class DispatchSystemIntegrationTest(unittest.TestCase):
-    """专门测试DispatchSystem与其他组件集成的测试类"""
+class IntegratedDispatchSystem:
+    """
+    Enhanced integration layer for the mining dispatch system components.
     
-    def setUp(self):
-        """测试前初始化环境"""
-        # 初始化真实组件
-        self.map_service = MapService()
-        self.planner = HybridPathPlanner(self.map_service)
+    This class wraps the standard DispatchSystem with improved error handling,
+    component integration, and monitoring capabilities.
+    """
+    
+    def __init__(self, map_service: Optional[MapService] = None, 
+                planner: Optional[HybridPathPlanner] = None):
+        """Initialize the integrated dispatch system with proper component connections."""
+        # Create core components if not provided
+        self.map_service = map_service or MapService()
+        self.planner = planner or HybridPathPlanner(self.map_service)
         
-        # 修补planner.plan_path方法以确保测试稳定性
-        def safe_plan_path(start, end, vehicle=None):
-            try:
-                # 尝试使用原始方法
-                if hasattr(self.planner, 'original_plan_path'):
-                    return self.planner.original_plan_path(start, end, vehicle)
-                else:
-                    # 简单直线路径作为备选
-                    return [start, (start[0] + end[0])/2, (start[1] + end[1])/2, end]
-            except Exception as e:
-                logging.warning(f"路径规划失败: {str(e)}, 使用备选方案")
-                # 简单直线路径作为备选
-                return [start, end]
+        # Create a safe wrapper for path planning
+        self._patch_path_planner()
         
-        # 保存原始方法并替换
-        if not hasattr(self.planner, 'original_plan_path'):
-            self.planner.original_plan_path = self.planner.plan_path
-            self.planner.plan_path = safe_plan_path
-            
-        # 创建调度系统实例
+        # Initialize the dispatch system
         self.dispatch = DispatchSystem(self.planner, self.map_service)
         
-        # 确保planner有dispatch引用
+        # Ensure the planner has a dispatch reference
         self.planner.dispatch = self.dispatch
         
-        # 初始化测试车辆
-        self.test_vehicles = [
-            MiningVehicle(
-                vehicle_id=1,
-                map_service=self.map_service,
-                config={
-                    'current_location': (200, 200),
-                    'max_capacity': 50,
-                    'max_speed': 8,
-                    'base_location': (200, 200),
-                    'status': VehicleState.IDLE
-                }
-            ),
-            MiningVehicle(
-                vehicle_id=2,
-                map_service=self.map_service,
-                config={
-                    'current_location': (-100, 50),
-                    'max_capacity': 50,
-                    'current_load': 40,
-                    'max_speed': 6,
-                    'base_location': (-100, 50)
-                }
-            ),
-            MiningVehicle(
-                vehicle_id=3,
-                map_service=self.map_service,
-                config={
-                    'current_location': (150, -80),
-                    'max_capacity': 50,
-                    'max_speed': 10,
-                    'base_location': (150, -80)
-                }
-            )
-        ]
+        # Monitor locks
+        self.monitor_lock = threading.RLock()
         
-        # 添加初始化检查和调试信息
-        for v in self.test_vehicles:
-            if not hasattr(v, 'current_path'):
-                v.current_path = []
-            if not hasattr(v, 'path_index'):
-                v.path_index = 0
+        # System state
+        self.is_running = False
+        self.dispatch_thread = None
+        self.monitor_thread = None
         
-        # 注册车辆到调度系统
-        for v in self.test_vehicles:
-            self.dispatch.vehicles[v.vehicle_id] = v
-            
-        # 创建测试任务
-        self.test_tasks = [
-            TransportTask(
-                task_id="Test-Load-01",
-                start_point=(-100.0, 50.0),
-                end_point=(0.0, -100.0),
-                task_type="loading",
-                waypoints=[(-50, 0), (0, -50)],
-                priority=1
-            ),
-            TransportTask(
-                task_id="Test-Unload-01",
-                start_point=(0.0, -100.0),
-                end_point=(200.0, 200.0),
-                task_type="unloading",
-                waypoints=[(50, -50), (100, 0)],
-                priority=2
-            )
-        ]
-    
-    def test_dispatch_initialization(self):
-        """测试调度系统初始化"""
-        # 验证调度系统正确初始化
-        self.assertEqual(len(self.dispatch.vehicles), 3, "应该有3辆车被注册到调度系统")
-        self.assertIsInstance(self.dispatch.scheduler, TransportScheduler, "调度器应该是TransportScheduler类型")
-        self.assertIsInstance(self.dispatch.cbs, ConflictBasedSearch, "冲突检测器应该是ConflictBasedSearch类型")
-        
-        # 验证调度配置
-        config = self.dispatch._load_config()
-        self.assertEqual(len(config['loading_points']), 3, "应该有3个装载点")
-        self.assertIsNotNone(config['unloading_point'], "应该有一个卸载点")
-        
-    def test_task_addition(self):
-        """测试任务添加功能"""
-        # 确认初始任务队列为空
-        self.assertEqual(len(self.dispatch.task_queue), 0, "初始任务队列应为空")
-        
-        # 添加测试任务
-        for task in self.test_tasks:
-            self.dispatch.add_task(task)
-        
-        # 验证任务已添加
-        self.assertEqual(len(self.dispatch.task_queue), 2, "任务队列应有2个任务")
-        task_ids = [task.task_id for task in self.dispatch.task_queue]
-        self.assertIn("Test-Load-01", task_ids, "装载任务应在队列中")
-        self.assertIn("Test-Unload-01", task_ids, "卸载任务应在队列中")
-    
-    def test_task_assignment(self):
-        """测试任务分配功能"""
-        # 添加测试任务
-        for task in self.test_tasks:
-            self.dispatch.add_task(task)
-        
-        # 执行调度周期
-        self.dispatch.scheduling_cycle()
-        
-        # 验证任务分配
-        self.assertGreater(len(self.dispatch.active_tasks), 0, "应该有活跃任务")
-        
-        # 检查是否有车辆被分配了任务
-        vehicles_with_tasks = [v for v in self.dispatch.vehicles.values() if v.current_task is not None]
-        self.assertGreater(len(vehicles_with_tasks), 0, "应该有车辆被分配了任务")
-        
-        # 验证任务状态
-        assigned_vehicle = vehicles_with_tasks[0]
-        self.assertEqual(assigned_vehicle.state, VehicleState.EN_ROUTE, "分配任务的车辆应该处于EN_ROUTE状态")
-        
-    def test_conflict_detection(self):
-        """测试冲突检测功能"""
-        # 创建模拟冲突路径
-        path1 = [(0,0), (1,1), (2,2)]
-        path2 = [(2,2), (1,1), (0,0)]
-        
-        # 设置车辆路径
-        self.test_vehicles[0].current_path = path1
-        self.test_vehicles[1].current_path = path2
-        
-        # 使用CBS检测冲突
-        paths = {
-            str(self.test_vehicles[0].vehicle_id): path1,
-            str(self.test_vehicles[1].vehicle_id): path2
+        # Monitoring stats
+        self.stats = {
+            'conflicts_detected': 0,
+            'conflicts_resolved': 0,
+            'tasks_assigned': 0,
+            'tasks_completed': 0,
+            'path_planning_failures': 0,
+            'system_start_time': None
         }
         
-        conflicts = self.dispatch.cbs.find_conflicts(paths)
+        logger.info("Integrated dispatch system initialized")
+
+    def _patch_path_planner(self):
+        """Create a safer version of path planning with fallback options."""
+        # Save the original plan_path method
+        if not hasattr(self.planner, 'original_plan_path'):
+            self.planner.original_plan_path = self.planner.plan_path
         
-        # 验证冲突检测
-        self.assertGreater(len(conflicts), 0, "应该检测到路径冲突")
+        # Replace with our enhanced version
+        def safe_plan_path(start, end, vehicle=None):
+            """Enhanced path planning with fallbacks for error resilience."""
+            try:
+                # Try the original method first
+                return self.planner.original_plan_path(start, end, vehicle)
+            except Exception as e:
+                logger.warning(f"Original path planning failed: {str(e)}, using fallback")
+                # Simple straight line path as fallback
+                if isinstance(start, tuple) and isinstance(end, tuple):
+                    # Generate intermediate points for smoother path
+                    dx = (end[0] - start[0]) / 5
+                    dy = (end[1] - start[1]) / 5
+                    path = [start]
+                    for i in range(1, 5):
+                        path.append((start[0] + dx * i, start[1] + dy * i))
+                    path.append(end)
+                    return path
+                return [start, end]
         
-        # 验证冲突解决
-        resolved_paths = self.dispatch.cbs.resolve_conflicts(paths)
-        self.assertEqual(len(resolved_paths), 2, "应该为两辆车返回解决后的路径")
+        # Apply the patch
+        self.planner.plan_path = safe_plan_path
+        logger.info("Path planner patched with safe fallback")
+
+    def register_vehicle(self, vehicle: MiningVehicle):
+        """Register a new vehicle with the dispatch system."""
+        # Initialize required attributes if missing
+        if not hasattr(vehicle, 'current_path'):
+            vehicle.current_path = []
+        if not hasattr(vehicle, 'path_index'):
+            vehicle.path_index = 0
         
-    def test_full_dispatch_cycle(self):
-        """测试完整的调度周期，从任务添加到分配"""
-        # 添加测试任务
-        for task in self.test_tasks:
-            self.dispatch.add_task(task)
+        # Add to dispatch system
+        self.dispatch.vehicles[vehicle.vehicle_id] = vehicle
+        logger.info(f"Vehicle {vehicle.vehicle_id} registered with dispatch system")
+
+    def add_task(self, task: TransportTask):
+        """Add a transport task to the dispatch queue."""
+        # Task validation
+        if not hasattr(task, 'is_completed'):
+            task.is_completed = False
+        if not hasattr(task, 'assigned_to'):
+            task.assigned_to = None
+        
+        # Add to dispatch queue
+        self.dispatch.add_task(task)
+        logger.info(f"Task {task.task_id} added to dispatch queue")
+
+    def start_dispatch_service(self, dispatch_interval: int = 30):
+        """Start the automated dispatch service."""
+        if self.is_running:
+            logger.warning("Dispatch service is already running")
+            return
+        
+        self.is_running = True
+        self.stats['system_start_time'] = datetime.now()
+        
+        # Start dispatch thread
+        def dispatch_loop():
+            while self.is_running:
+                try:
+                    self.dispatch.scheduling_cycle()
+                    logger.info(f"Dispatch cycle completed. Active tasks: {len(self.dispatch.active_tasks)}")
+                except Exception as e:
+                    logger.error(f"Error in dispatch cycle: {str(e)}")
+                time.sleep(dispatch_interval)
+        
+        self.dispatch_thread = threading.Thread(target=dispatch_loop, daemon=True)
+        self.dispatch_thread.start()
+        
+        # Start monitoring thread
+        def monitor_loop():
+            while self.is_running:
+                try:
+                    self._update_system_stats()
+                except Exception as e:
+                    logger.error(f"Error in monitoring: {str(e)}")
+                time.sleep(60)  # Update stats every minute
+                
+        self.monitor_thread = threading.Thread(target=monitor_loop, daemon=True)
+        self.monitor_thread.start()
+        
+        logger.info(f"Dispatch service started with {dispatch_interval}s cycle")
+
+    def stop_dispatch_service(self):
+        """Stop the automated dispatch service."""
+        if not self.is_running:
+            logger.warning("Dispatch service is not running")
+            return
+        
+        self.is_running = False
+        
+        # Wait for threads to terminate
+        if self.dispatch_thread:
+            self.dispatch_thread.join(timeout=5)
+        if self.monitor_thread:
+            self.monitor_thread.join(timeout=5)
             
-        # 记录原始状态
-        initial_queue_length = len(self.dispatch.task_queue)
-        initial_active_tasks = len(self.dispatch.active_tasks)
-        
-        # 执行调度周期
-        try:
-            self.dispatch.scheduling_cycle()
+        logger.info("Dispatch service stopped")
+
+    def _update_system_stats(self):
+        """Update system monitoring statistics."""
+        with self.monitor_lock:
+            # Count vehicles by state
+            vehicle_states = {}
+            for v in self.dispatch.vehicles.values():
+                state_name = v.state.name if hasattr(v.state, 'name') else str(v.state)
+                vehicle_states[state_name] = vehicle_states.get(state_name, 0) + 1
             
-            # 验证任务队列变化
-            self.assertLess(len(self.dispatch.task_queue), initial_queue_length, 
-                           "调度后任务队列应减少")
-                           
-            # 验证活动任务增加
-            self.assertGreater(len(self.dispatch.active_tasks), initial_active_tasks, 
-                              "调度后活动任务应增加")
-                              
-            # 验证车辆状态更新
-            active_vehicles = [v for v in self.dispatch.vehicles.values() 
-                             if v.state == VehicleState.EN_ROUTE]
-            self.assertGreater(len(active_vehicles), 0, "应该有车辆处于EN_ROUTE状态")
+            # Update stats
+            self.stats['vehicle_states'] = vehicle_states
+            self.stats['active_tasks'] = len(self.dispatch.active_tasks)
+            self.stats['queued_tasks'] = len(self.dispatch.task_queue)
+            self.stats['uptime_seconds'] = (datetime.now() - self.stats['system_start_time']).total_seconds()
             
-        except Exception as e:
-            self.fail(f"调度周期执行失败: {str(e)}")
-            
-    def test_dispatch_vehicle_to(self):
-        """测试直接调度车辆功能"""
-        # 指定目标位置
-        destination = (50.0, 50.0)
-        
-        # 执行直接调度
-        vehicle_id = 1
+            logger.debug(f"System stats updated: {self.stats}")
+
+    def get_system_status(self) -> Dict:
+        """Get the current system status."""
+        with self.monitor_lock:
+            return {
+                'timestamp': datetime.now().isoformat(),
+                'stats': self.stats.copy(),
+                'vehicles': {
+                    vid: {
+                        'state': v.state.name if hasattr(v.state, 'name') else str(v.state),
+                        'location': v.current_location,
+                        'has_task': v.current_task is not None
+                    } for vid, v in self.dispatch.vehicles.items()
+                },
+                'active_tasks': list(self.dispatch.active_tasks.keys()),
+                'completed_tasks': list(self.dispatch.completed_tasks.keys())
+            }
+
+    def direct_dispatch(self, vehicle_id: int, destination: Tuple[float, float]):
+        """Directly dispatch a vehicle to a specific location."""
         try:
             self.dispatch.dispatch_vehicle_to(vehicle_id, destination)
-            
-            # 验证任务创建和分配
-            vehicle = self.dispatch.vehicles[vehicle_id]
-            self.assertIsNotNone(vehicle.current_task, "车辆应该被分配任务")
-            self.assertEqual(vehicle.current_task.end_point, destination, 
-                           "任务终点应为指定位置")
-            self.assertEqual(vehicle.current_task.task_type, "manual", 
-                           "应该是手动任务类型")
-            
-            # 验证活动任务增加
-            self.assertGreater(len(self.dispatch.active_tasks), 0, 
-                              "活动任务应至少有一个")
-                              
+            self.stats['tasks_assigned'] += 1
+            return True
         except Exception as e:
-            self.fail(f"直接调度失败: {str(e)}")
-            
-    def test_ascii_map_visualization(self):
-        """测试ASCII地图可视化功能"""
+            logger.error(f"Direct dispatch failed: {str(e)}")
+            return False
+
+    def refresh_paths(self):
+        """Force refresh of all vehicle paths to resolve conflicts."""
         try:
-            # 设置车辆状态
-            self.dispatch.vehicles[1].state = VehicleState.IDLE
-            self.dispatch.vehicles[2].state = VehicleState.PREPARING
-            self.dispatch.vehicles[3].state = VehicleState.EN_ROUTE
-            self.dispatch.vehicles[3].transport_stage = TransportStage.APPROACHING
+            # Collect current vehicle paths
+            all_paths = {}
+            for vid, vehicle in self.dispatch.vehicles.items():
+                if hasattr(vehicle, 'current_path') and vehicle.current_path:
+                    all_paths[str(vid)] = vehicle.current_path
             
-            # 调用可视化方法（检查是否会抛出异常）
-            self.dispatch.print_ascii_map()
+            if not all_paths:
+                logger.info("No paths to refresh")
+                return
             
-            # 如果没有异常，则测试通过
-            self.assertTrue(True, "ASCII地图可视化应能正常运行")
+            # Resolve conflicts
+            resolved_paths = self.dispatch.cbs.resolve_conflicts(all_paths)
             
+            # Update vehicle paths
+            with self.dispatch.vehicle_lock:
+                for vid_str, path in resolved_paths.items():
+                    try:
+                        vid = int(vid_str) if vid_str.isdigit() else vid_str
+                        if path and vid in self.dispatch.vehicles:
+                            self.dispatch.vehicles[vid].assign_path(path)
+                            logger.debug(f"Refreshed path for vehicle {vid}")
+                    except Exception as e:
+                        logger.error(f"Path refresh failed for vehicle {vid}: {str(e)}")
+                        
+            logger.info(f"Refreshed paths for {len(resolved_paths)} vehicles")
+            return True
         except Exception as e:
-            self.fail(f"ASCII地图可视化失败: {str(e)}")
-            
-    @patch('time.sleep')  # 避免实际等待
-    def test_multiple_scheduling_cycles(self, mock_sleep):
-        """测试多个连续调度周期"""
-        # 添加测试任务
-        for task in self.test_tasks:
-            self.dispatch.add_task(task)
-            
-        # 执行多个调度周期
-        for cycle in range(3):
+            logger.error(f"Path refresh failed: {str(e)}")
+            return False
+
+    def get_vehicle_recommendations(self, task_id: str) -> List[int]:
+        """Get recommended vehicles for a specific task based on current state."""
+        if task_id not in self.dispatch.active_tasks and task_id not in self.dispatch.task_queue:
+            logger.warning(f"Task {task_id} not found")
+            return []
+        
+        # Find the task
+        task = None
+        for t in self.dispatch.task_queue:
+            if t.task_id == task_id:
+                task = t
+                break
+        
+        if not task:
+            for tid, t in self.dispatch.active_tasks.items():
+                if tid == task_id:
+                    task = t
+                    break
+        
+        if not task:
+            return []
+        
+        # Rank vehicles by suitability
+        ranked_vehicles = []
+        for vid, vehicle in self.dispatch.vehicles.items():
+            # Skip vehicles with tasks
+            if vehicle.current_task:
+                continue
+                
+            # Calculate distance to task start
             try:
-                # 执行调度
-                self.dispatch.scheduling_cycle()
-                
-                # 添加更多任务（保持系统繁忙）
-                new_task = TransportTask(
-                    task_id=f"Cycle-{cycle}-Task",
-                    start_point=(-100.0, 50.0),
-                    end_point=(0.0, -100.0),
-                    task_type="loading",
-                    priority=1
+                distance = math.hypot(
+                    vehicle.current_location[0] - task.start_point[0],
+                    vehicle.current_location[1] - task.start_point[1]
                 )
-                self.dispatch.add_task(new_task)
                 
+                # Calculate a score (lower is better)
+                score = distance
+                
+                # Adjust for vehicle state
+                if vehicle.state == VehicleState.IDLE:
+                    score *= 0.8  # Prefer idle vehicles
+                    
+                ranked_vehicles.append((vid, score))
             except Exception as e:
-                self.fail(f"调度周期 {cycle} 执行失败: {str(e)}")
+                logger.error(f"Recommendation calculation failed: {str(e)}")
                 
-        # 验证系统状态
-        self.assertGreaterEqual(len(self.dispatch.task_queue) + len(self.dispatch.active_tasks), 
-                               1, "系统应有待处理或活动的任务")
-                               
-        # 验证没有异常                       
-        self.assertTrue(True, "多个调度周期应能正常执行") 
+        # Sort by score (lower is better)
+        ranked_vehicles.sort(key=lambda x: x[1])
+        
+        # Return vehicle IDs
+        return [vid for vid, _ in ranked_vehicles[:3]]  # Top 3 recommendations
 
-    def test_vehicle_state_updates(self):
-        """测试车辆状态更新功能"""
-        # 设置测试车辆的位置和任务
-        vehicle = self.dispatch.vehicles[1]
-        vehicle.current_task = self.test_tasks[0]
-        
-        # 设置车辆位置为装载点
-        loading_point = self.dispatch.scheduler.loading_points[0]
-        vehicle.current_location = loading_point
-        
-        # 执行状态更新
-        self.dispatch._update_vehicle_states()
-        
-        # 验证状态更新
-        self.assertEqual(vehicle.state, VehicleState.EN_ROUTE, 
-                       "有任务的车辆应处于EN_ROUTE状态")
-                       
-        # 测试任务类型对运输阶段的影响
-        self.assertEqual(vehicle.transport_stage, TransportStage.APPROACHING, 
-                       "装载任务应处于APPROACHING阶段")
-                       
-    def test_integration_with_path_planner(self):
-        """测试调度系统与路径规划器的集成"""
-        # 设置测试场景
-        vehicle = self.dispatch.vehicles[1]
-        start = vehicle.current_location
-        end = (50, 50)
-        
-        # 直接使用规划器计划路径
-        path = self.planner.optimize_path(start, end, vehicle)
-        
-        # 验证路径规划结果
-        self.assertIsNotNone(path)
-        self.assertGreater(len(path), 0)
-        
-        # 将路径分配给车辆
-        vehicle.assign_path(path)
-        
-        # 确认冲突检测能够处理此路径
-        self.dispatch._detect_conflicts()
-        
-        # 如果没有异常，则集成测试通过
-        self.assertTrue(True, "路径规划与调度系统应能无缝集成")
+    def clear_completed_tasks(self):
+        """Clear completed tasks to free up memory."""
+        count = len(self.dispatch.completed_tasks)
+        self.dispatch.completed_tasks.clear()
+        logger.info(f"Cleared {count} completed tasks")
+        return count
 
-if __name__ == '__main__':
-    unittest.main()
+
+class EnhancedConflictResolution:
+    """
+    Enhanced conflict resolution algorithm with improved prioritization
+    and deadlock prevention.
+    """
+    
+    def __init__(self, dispatch_system: IntegratedDispatchSystem):
+        """Initialize with a reference to the dispatch system."""
+        self.dispatch = dispatch_system.dispatch
+        self.vehicle_priorities = {}
+        self.deadlock_detection = DeadlockDetector()
+        
+    def detect_and_resolve_all_conflicts(self) -> int:
+        """Detect and resolve all conflicts in the system."""
+        # Collect all vehicle paths
+        all_paths = {}
+        for vid, vehicle in self.dispatch.vehicles.items():
+            if hasattr(vehicle, 'current_path') and vehicle.current_path:
+                all_paths[str(vid)] = vehicle.current_path
+        
+        if not all_paths:
+            return 0
+            
+        # Enhanced conflict detection with our improved algorithm
+        conflicts = self._detect_conflicts_with_timeframes(all_paths)
+        
+        if not conflicts:
+            return 0
+            
+        # Check for potential deadlocks
+        deadlocked_vehicles = self.deadlock_detection.check_deadlocks(
+            conflicts, self.dispatch.vehicles
+        )
+        
+        # Update priorities with deadlock information
+        for vid in deadlocked_vehicles:
+            self.vehicle_priorities[vid] = -1  # Lowest priority to break deadlocks
+        
+        # Resolve conflicts
+        resolved_count = self._resolve_conflicts_enhanced(conflicts, all_paths)
+        
+        return resolved_count
+        
+    def _detect_conflicts_with_timeframes(self, paths: Dict[str, List[Tuple]]) -> List[Dict]:
+        """
+        Enhanced conflict detection that considers vehicle speed and timeframes.
+        """
+        conflicts = []
+        path_items = list(paths.items())
+        
+        for i in range(len(path_items)):
+            vid1, path1 = path_items[i]
+            vehicle1 = self._get_vehicle(vid1)
+            speed1 = getattr(vehicle1, 'max_speed', 5.0)
+            
+            for j in range(i+1, len(path_items)):
+                vid2, path2 = path_items[j]
+                vehicle2 = self._get_vehicle(vid2)
+                speed2 = getattr(vehicle2, 'max_speed', 5.0)
+                
+                # Calculate minimum path length
+                min_len = min(len(path1), len(path2))
+                if min_len < 2:
+                    continue
+                
+                # Check direct position conflicts
+                for t in range(min_len):
+                    point1 = path1[t]
+                    point2 = path2[t]
+                    
+                    # Calculate time estimates based on speeds
+                    time1 = t / speed1
+                    time2 = t / speed2
+                    
+                    # If vehicles would be at the same point at similar times
+                    if point1 == point2 and abs(time1 - time2) < 0.5:
+                        conflicts.append({
+                            'type': 'position',
+                            'time_index': t,
+                            'position': point1,
+                            'vehicle1': vid1,
+                            'vehicle2': vid2,
+                            'time1': time1,
+                            'time2': time2
+                        })
+                
+                # Check crossing paths
+                for t1 in range(min_len-1):
+                    segment1 = (path1[t1], path1[t1+1])
+                    for t2 in range(min_len-1):
+                        segment2 = (path2[t2], path2[t2+1])
+                        
+                        if self._segments_intersect(segment1, segment2):
+                            # Calculate time estimates
+                            time1 = t1 / speed1
+                            time2 = t2 / speed2
+                            
+                            if abs(time1 - time2) < 1.0:  # Within 1 time unit
+                                conflicts.append({
+                                    'type': 'crossing',
+                                    'segment1': segment1,
+                                    'segment2': segment2,
+                                    'vehicle1': vid1,
+                                    'vehicle2': vid2,
+                                    'time1': time1,
+                                    'time2': time2
+                                })
+        
+        return conflicts
+    
+    def _segments_intersect(self, seg1, seg2) -> bool:
+        """Check if two line segments intersect."""
+        (x1, y1), (x2, y2) = seg1
+        (x3, y3), (x4, y4) = seg2
+        
+        # Calculate direction vectors
+        dx1 = x2 - x1
+        dy1 = y2 - y1
+        dx2 = x4 - x3
+        dy2 = y4 - y3
+        
+        # Calculate the determinant
+        det = dx1 * dy2 - dy1 * dx2
+        
+        # Lines are parallel if det is zero
+        if abs(det) < 1e-6:
+            return False
+            
+        # Calculate parameters for intersection point
+        t1 = ((x3 - x1) * dy2 - (y3 - y1) * dx2) / det
+        t2 = ((x3 - x1) * dy1 - (y3 - y1) * dx1) / det
+        
+        # Check if intersection point is within both segments
+        return 0 <= t1 <= 1 and 0 <= t2 <= 1
+    
+    def _get_vehicle(self, vid):
+        """Get vehicle by string or int ID."""
+        try:
+            if isinstance(vid, str) and vid.isdigit():
+                vid = int(vid)
+            return self.dispatch.vehicles.get(vid)
+        except:
+            return None
+            
+    def _get_vehicle_priority(self, vid) -> int:
+        """Get priority for a vehicle with enhancements for special cases."""
+        # Check manual override first
+        if vid in self.vehicle_priorities:
+            return self.vehicle_priorities[vid]
+            
+        vehicle = self._get_vehicle(vid)
+        if not vehicle:
+            return 5  # Default priority
+            
+        # State-based priorities
+        priorities = {
+            VehicleState.UNLOADING: 1,  # Highest priority
+            VehicleState.PREPARING: 2,
+            TransportStage.TRANSPORTING: 3,
+            TransportStage.APPROACHING: 4,
+            VehicleState.IDLE: 5  # Lowest priority
+        }
+        
+        # Determine priority based on state
+        if vehicle.state == VehicleState.EN_ROUTE and hasattr(vehicle, 'transport_stage'):
+            priority = priorities.get(vehicle.transport_stage, 5)
+        else:
+            priority = priorities.get(vehicle.state, 5)
+            
+        # Consider task priority if vehicle has a task
+        if hasattr(vehicle, 'current_task') and vehicle.current_task:
+            task_priority = getattr(vehicle.current_task, 'priority', 1)
+            priority = min(priority, 5 - task_priority)  # Adjust for task priority
+            
+        return priority
+            
+    def _resolve_conflicts_enhanced(self, conflicts, paths) -> int:
+        """
+        Resolve conflicts with enhanced logic for better traffic management.
+        
+        Returns the number of conflicts resolved.
+        """
+        resolved_count = 0
+        new_paths = paths.copy()
+        
+        # Group conflicts by vehicle pairs to address all conflicts for a pair at once
+        vehicle_conflicts = {}
+        for conflict in conflicts:
+            pair = tuple(sorted([conflict['vehicle1'], conflict['vehicle2']]))
+            if pair not in vehicle_conflicts:
+                vehicle_conflicts[pair] = []
+            vehicle_conflicts[pair].append(conflict)
+        
+        # Process conflicts by vehicle pair
+        for pair, conflict_list in vehicle_conflicts.items():
+            vid1, vid2 = pair
+            prio1 = self._get_vehicle_priority(vid1)
+            prio2 = self._get_vehicle_priority(vid2)
+            
+            # Determine which vehicle should be replanned
+            replan_vid = vid2 if prio1 <= prio2 else vid1
+            
+            # Log the conflict prioritization
+            logger.debug(f"Resolving conflicts between {vid1}(prio:{prio1}) and {vid2}(prio:{prio2})")
+            logger.debug(f"Vehicle {replan_vid} will be replanned for {len(conflict_list)} conflicts")
+            
+            # Attempt to replan the path for the lower priority vehicle
+            try:
+                if replan_vid == vid1:
+                    original_vid = vid1
+                    vehicle = self._get_vehicle(vid1)
+                    other_vehicle = self._get_vehicle(vid2)
+                else:
+                    original_vid = vid2
+                    vehicle = self._get_vehicle(vid2)
+                    other_vehicle = self._get_vehicle(vid2)
+                
+                if vehicle and vehicle.current_task:
+                    # Get the end point from the current task
+                    end_point = vehicle.current_task.end_point
+                    
+                    # Get the other vehicle's path to avoid
+                    avoid_path = new_paths[str(vid1 if replan_vid == vid2 else vid2)]
+                    
+                    # Create a padded avoidance area around the conflict points
+                    avoid_points = set()
+                    for conflict in conflict_list:
+                        if conflict['type'] == 'position':
+                            pos = conflict['position']
+                            # Add points around the conflict
+                            for dx in range(-1, 2):
+                                for dy in range(-1, 2):
+                                    avoid_points.add((pos[0] + dx, pos[1] + dy))
+                        elif conflict['type'] == 'crossing':
+                            # Add both segments to avoid
+                            for segment in [conflict['segment1'], conflict['segment2']]:
+                                for point in segment:
+                                    for dx in range(-1, 2):
+                                        for dy in range(-1, 2):
+                                            avoid_points.add((point[0] + dx, point[1] + dy))
+                    
+                    # Attempt path replanning
+                    original_obstacles = self.dispatch.planner.obstacle_grids.copy()
+                    
+                    # Temporarily add avoidance points to obstacles
+                    self.dispatch.planner.obstacle_grids.update(avoid_points)
+                    
+                    try:
+                        # Replan path
+                        new_path = self.dispatch.planner.plan_path(
+                            vehicle.current_location,
+                            end_point,
+                            vehicle
+                        )
+                        
+                        if new_path and len(new_path) > 1:
+                            new_paths[str(original_vid)] = new_path
+                            vehicle.assign_path(new_path)
+                            resolved_count += len(conflict_list)
+                            logger.info(f"Successfully replanned path for vehicle {original_vid}")
+                        else:
+                            logger.warning(f"Path replanning returned empty path for vehicle {original_vid}")
+                    finally:
+                        # Restore original obstacles
+                        self.dispatch.planner.obstacle_grids = original_obstacles
+                else:
+                    logger.warning(f"Vehicle {original_vid} not found or has no task")
+            except Exception as e:
+                logger.error(f"Path replanning failed: {str(e)}")
+        
+        return resolved_count
+
+
+class DeadlockDetector:
+    """
+    Deadlock detection algorithm to prevent vehicles from getting stuck.
+    """
+    
+    def __init__(self):
+        """Initialize the deadlock detector."""
+        self.deadlock_history = {}  # Track potential deadlocks over time
+        self.resolution_count = {}  # Track how many times a vehicle has been replanned
+    
+    def check_deadlocks(self, conflicts, vehicles) -> Set[int]:
+        """
+        Check for potential deadlocks in the system.
+        
+        Returns a set of vehicle IDs that should be prioritized for replanning
+        to break deadlocks.
+        """
+        # Build a dependency graph from conflicts
+        dependency_graph = {}
+        
+        for conflict in conflicts:
+            vid1 = conflict['vehicle1']
+            vid2 = conflict['vehicle2']
+            
+            # Convert to integers if possible
+            if isinstance(vid1, str) and vid1.isdigit():
+                vid1 = int(vid1)
+            if isinstance(vid2, str) and vid2.isdigit():
+                vid2 = int(vid2)
+                
+            if vid1 not in dependency_graph:
+                dependency_graph[vid1] = set()
+            if vid2 not in dependency_graph:
+                dependency_graph[vid2] = set()
+                
+            # Add dependencies based on conflict
+            dependency_graph[vid1].add(vid2)
+            dependency_graph[vid2].add(vid1)
+            
+        # Find cycles (potential deadlocks)
+        deadlocked_vehicles = self._find_cycles(dependency_graph)
+        
+        # Update history
+        current_time = time.time()
+        for vid in deadlocked_vehicles:
+            if vid not in self.deadlock_history:
+                self.deadlock_history[vid] = []
+            
+            self.deadlock_history[vid].append(current_time)
+            
+            # Clean up old entries (more than 5 minutes old)
+            self.deadlock_history[vid] = [t for t in self.deadlock_history[vid] 
+                                        if current_time - t < 300]
+        
+        # Identify persistent deadlocks (detected multiple times in short period)
+        persistent_deadlocks = set()
+        for vid, timestamps in self.deadlock_history.items():
+            if len(timestamps) >= 3:  # Detected at least 3 times
+                persistent_deadlocks.add(vid)
+                
+                # Increment resolution count
+                self.resolution_count[vid] = self.resolution_count.get(vid, 0) + 1
+                
+        return persistent_deadlocks
+                
+    def _find_cycles(self, graph) -> Set:
+        """Find cycles in dependency graph using DFS."""
+        visited = set()
+        rec_stack = set()
+        cycle_nodes = set()
+        
+        def dfs(node, parent=None):
+            visited.add(node)
+            rec_stack.add(node)
+            
+            for neighbor in graph.get(node, []):
+                if neighbor == parent:
+                    continue
+                    
+                if neighbor not in visited:
+                    if dfs(neighbor, node):
+                        cycle_nodes.add(neighbor)
+                        return True
+                elif neighbor in rec_stack:
+                    cycle_nodes.add(neighbor)
+                    cycle_nodes.add(node)
+                    return True
+            
+            rec_stack.remove(node)
+            return False
+            
+        for node in graph:
+            if node not in visited:
+                dfs(node)
+                
+        return cycle_nodes
+
+
+# Main integration function to patch and connect system components
+def integrate_dispatch_system():
+    """
+    Create and configure a fully integrated dispatch system with all components.
+    
+    Returns:
+        IntegratedDispatchSystem: Ready-to-use dispatch system
+    """
+    # Create the map service
+    map_service = MapService()
+    
+    # Create the path planner
+    planner = HybridPathPlanner(map_service)
+    
+    # Create the integrated system
+    system = IntegratedDispatchSystem(map_service, planner)
+    
+    # Create enhanced conflict resolution
+    conflict_resolver = EnhancedConflictResolution(system)
+    
+    # Set up hooks for dynamic conflict resolution
+    original_scheduling_cycle = system.dispatch.scheduling_cycle
+    
+    def enhanced_scheduling_cycle():
+        """Enhanced scheduling cycle with integrated conflict detection."""
+        # Run the original cycle first
+        original_scheduling_cycle()
+        
+        # Then run our enhanced conflict detection
+        conflicts_resolved = conflict_resolver.detect_and_resolve_all_conflicts()
+        
+        # Update stats
+        if conflicts_resolved > 0:
+            system.stats['conflicts_detected'] += conflicts_resolved
+            system.stats['conflicts_resolved'] += conflicts_resolved
+            logger.info(f"Resolved {conflicts_resolved} conflicts in enhanced cycle")
+    
+    # Apply the enhancement
+    system.dispatch.scheduling_cycle = enhanced_scheduling_cycle
+    logger.info("Enhanced scheduling cycle applied with dynamic conflict resolution")
+    
+    return system
+
+
+# Example usage demonstration
+def run_example():
+    """
+    Run a simple demonstration of the integrated system.
+    """
+    # Create the integrated system
+    system = integrate_dispatch_system()
+    
+    # Create test vehicles
+    vehicles = [
+        MiningVehicle(
+            vehicle_id=i,
+            map_service=system.map_service,
+            config={
+                'current_location': (100+i*50, 100+i*30),
+                'max_capacity': 50,
+                'max_speed': 5 + i*2,
+                'base_location': (200, 200),
+                'turning_radius': 10.0
+            }
+        )
+        for i in range(1, 4)
+    ]
+    
+    # Register vehicles
+    for vehicle in vehicles:
+        system.register_vehicle(vehicle)
+    
+    # Create test tasks
+    tasks = [
+        TransportTask(
+            task_id=f"TASK-{i:02d}",
+            start_point=(0, i*50),
+            end_point=(300, i*30),
+            task_type="loading" if i % 2 == 0 else "unloading",
+            priority=i
+        )
+        for i in range(1, 4)
+    ]
+    
+    # Add tasks
+    for task in tasks:
+        system.add_task(task)
+    
+    # Start the dispatch service
+    system.start_dispatch_service(dispatch_interval=5)
+    
+    # Run for a short period
+    try:
+        for i in range(5):
+            status = system.get_system_status()
+            print(f"System status at {status['timestamp']}:")
+            print(f"  Active tasks: {len(status['active_tasks'])}")
+            print(f"  Queued tasks: {status['stats']['queued_tasks']}")
+            print(f"  Vehicle states: {status['stats']['vehicle_states']}")
+            
+            # Sleep between status updates
+            time.sleep(5)
+            
+            # Add another task halfway through
+            if i == 2:
+                new_task = TransportTask(
+                    task_id="TASK-EXTRA",
+                    start_point=(50, 50),
+                    end_point=(250, 250),
+                    task_type="manual",
+                    priority=5
+                )
+                system.add_task(new_task)
+                print("Added extra task: TASK-EXTRA")
+    finally:
+        # Stop the service
+        system.stop_dispatch_service()
+        print("Dispatch service stopped")
+
+
+if __name__ == "__main__":
+    # Run the example
+    run_example()

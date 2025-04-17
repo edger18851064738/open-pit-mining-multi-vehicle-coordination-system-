@@ -9,6 +9,9 @@ import numpy as np
 from typing import List, Tuple, Dict, Optional, Union, Set, Callable
 from functools import lru_cache
 import matplotlib.pyplot as plt
+from matplotlib import rcParams
+rcParams['font.sans-serif'] = ['SimHei', 'Arial']  # 使用系统默认中文字体
+rcParams['axes.unicode_minus'] = False  # 解决负号显示问题
 from collections import defaultdict
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -380,7 +383,61 @@ class HybridPathPlanner:
             self.total_planning_time += elapsed
             # 出错时使用简单直线路径
             return [start, end]
-            
+# 修改方案：使用队列来安全地在线程间传递结果，而不是直接修改path列表
+
+    def plan_with_timeout(planner, start_point, end_point, vehicle, timeout=5.0):
+        """
+        带超时的路径规划函数，解决线程通信问题
+        """
+        import queue
+        
+        # 使用队列安全地传递结果
+        result_queue = queue.Queue()
+        
+        def planning_worker():
+            try:
+                # 将路径规划结果放入队列
+                path_result = planner.plan_path(start_point, end_point, vehicle)
+                result_queue.put(path_result)
+            except Exception as e:
+                # 捕获异常并放入队列
+                result_queue.put(Exception(f"路径规划出错: {str(e)}"))
+        
+        # 启动规划线程
+        planning_thread = threading.Thread(target=planning_worker, daemon=True)
+        start_time = time.time()
+        planning_thread.start()
+        
+        # 等待线程完成或超时
+        planning_thread.join(timeout)
+        
+        # 检查是否超时
+        elapsed = time.time() - start_time
+        
+        # 获取结果
+        if planning_thread.is_alive():
+            # 超时，返回直线路径
+            print(f"  路径规划超时 ({timeout}秒)，使用直线路径")
+            return [start_point, end_point], elapsed
+        else:
+            try:
+                # 检查队列中的结果
+                result = result_queue.get(block=False)
+                if isinstance(result, Exception):
+                    # 如果是异常则使用直线路径
+                    print(f"  路径规划失败: {str(result)}，使用直线路径")
+                    return [start_point, end_point], elapsed
+                elif not result or len(result) < 2:
+                    print(f"  无效路径，使用直线路径")
+                    return [start_point, end_point], elapsed
+                else:
+                    # 规划成功
+                    print(f"  路径规划成功！路径包含 {len(result)} 个点，用时 {elapsed:.3f} 秒")
+                    return result, elapsed
+            except queue.Empty:
+                # 队列为空，说明线程可能异常终止
+                print(f"  路径规划过程异常终止，使用直线路径")
+                return [start_point, end_point], elapsed            
     def _fast_astar(self, start: Tuple, end: Tuple) -> List[Tuple]:
         """优化的A*算法 - 不考虑车辆约束时的快速版本"""
         # 创建起点和终点节点
@@ -945,3 +1002,364 @@ class HybridPathPlanner:
         self.haul_roads.clear()
         self.reservation_table.clear()
         logging.info("已释放所有路径规划资源")
+
+if __name__ == "__main__":
+    """
+    HybridPathPlanner 优化版测试模块
+    在 150x150 地图上测试两个装载点、一个卸载点和一个停车点之间的路径规划
+    """
+    import os
+    import sys
+    import time
+    import matplotlib.pyplot as plt
+    import numpy as np
+    import random
+    
+    # 确保路径正确
+    PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    sys.path.insert(0, PROJECT_ROOT)
+    
+    from algorithm.map_service import MapService
+    from utils.geo_tools import GeoUtils
+    from utils.path_tools import PathProcessor
+    
+    # 设置随机种子，保证结果可重现
+    random.seed(42)
+    
+    # 配置日志级别减少输出
+    logging.basicConfig(level=logging.WARNING)
+    
+    print("===============================================")
+    print("   HybridPathPlanner 路径规划测试 (150x150 地图)")
+    print("===============================================")
+    
+    # 辅助函数：创建简单地图
+    def create_simple_map(size=150, obstacle_density=0.03):  # 减少障碍物密度
+        """创建简单的测试地图"""
+        # 模拟配置
+        config_path = os.path.join(PROJECT_ROOT, 'config.ini')
+        if os.path.exists(config_path):
+            import configparser
+            config = configparser.ConfigParser()
+            config.read(config_path)
+            # 修改地图尺寸
+            if 'MAP' not in config:
+                config['MAP'] = {}
+            config['MAP']['grid_size'] = str(size)
+            config['MAP']['obstacle_density'] = str(obstacle_density)
+            # 保存回文件
+            with open(config_path, 'w') as f:
+                config.write(f)
+            print(f"已更新配置文件: {config_path}")
+        
+        # 创建地图服务
+        try:
+            geo_utils = GeoUtils()
+            map_service = MapService(PathProcessor(geo_utils))
+            print("地图服务初始化成功")
+            return map_service
+        except Exception as e:
+            print(f"地图服务初始化失败: {str(e)}")
+            # 如果创建Map服务失败，创建一个简单的模拟对象
+            class SimpleMapService:
+                def __init__(self):
+                    self.geo_utils = GeoUtils()
+                    self.grid_size = size
+                    
+                def get_terrain_hardness(self, x, y):
+                    # 简化版永远返回中等硬度
+                    return 3.0
+                    
+            return SimpleMapService()
+    
+    # 辅助函数：生成障碍物
+    def generate_obstacles(planner, num_obstacles=8, obstacle_size=3):  # 减少障碍物数量和大小
+        """生成随机障碍物"""
+        obstacles = set()
+        # 添加一些随机障碍物
+        for _ in range(num_obstacles):
+            center_x = random.randint(10, 140)
+            center_y = random.randint(10, 140)
+            # 生成障碍物周围的点
+            for dx in range(-obstacle_size, obstacle_size + 1):
+                for dy in range(-obstacle_size, obstacle_size + 1):
+                    if dx**2 + dy**2 <= obstacle_size**2:  # 圆形障碍物
+                        obstacles.add((center_x + dx, center_y + dy))
+        
+        # 避免在测试点上生成障碍物
+        for point in test_points.values():
+            # 清除测试点周围10个单位的障碍物
+            for dx in range(-10, 11):
+                for dy in range(-10, 11):
+                    if dx**2 + dy**2 <= 100:  # 10的平方
+                        obstacles.discard((point[0] + dx, point[1] + dy))
+        
+        # 设置到路径规划器
+        planner.obstacle_grids = obstacles
+        print(f"已生成 {len(obstacles)} 个障碍物点")
+        
+        # 预填充地形硬度缓存
+        for x in range(0, 150, 5):  # 每5个单位取样
+            for y in range(0, 150, 5):
+                planner.terrain_cache[(x, y)] = 3.0  # 使用默认硬度
+    
+    # 定义测试点位置（在 150x150 的地图范围内）
+    test_points = {
+        "装载点1": (30, 120),
+        "装载点2": (120, 30),
+        "卸载点": (75, 75),
+        "停车点": (120, 120)
+    }
+    
+    # 创建一个简单的车辆对象用于测试
+    class TestVehicle:
+        def __init__(self, load=0):
+            self.vehicle_id = "test"
+            self.turning_radius = 10.0
+            self.min_hardness = 2.5
+            self.current_load = load
+            self.max_speed = 5.0
+            self.path_index = 0
+            self.current_path = []
+            self.last_position = None
+    
+    # 两种车辆情况：空载和满载
+    test_vehicles = {
+        "空载车辆": TestVehicle(load=0),
+        "满载车辆": TestVehicle(load=50000)
+    }
+    
+    # 优化A*搜索的参数
+    def optimize_planner(planner):
+        """优化路径规划器的参数"""
+        # 设置更大的搜索步长
+        planner.directions = [
+            (-1, 0), (1, 0), (0, -1), (0, 1),  # 上下左右
+            (-1, -1), (-1, 1), (1, -1), (1, 1)  # 对角线
+        ]
+        
+        # 限制点数
+        original_fast_astar = planner._fast_astar
+        
+        def limited_fast_astar(start, end):
+            # 计算起点终点距离
+            dist = math.dist(start, end)
+            # 设置最大点数限制
+            max_nodes = min(1000, int(dist * 10))
+            
+            # 计数变量
+            nodes_expanded = [0]
+            
+            # 覆盖内部函数
+            original_is_same_point = planner._is_same_point
+            
+            def counted_is_same_point(a, b, tolerance=EPSILON):
+                nodes_expanded[0] += 1
+                if nodes_expanded[0] > max_nodes:
+                    # 如果展开太多节点，提前结束
+                    return True
+                return original_is_same_point(a, b, tolerance)
+            
+            # 替换函数
+            planner._is_same_point = counted_is_same_point
+            
+            try:
+                return original_fast_astar(start, end)
+            finally:
+                # 恢复原始函数
+                planner._is_same_point = original_is_same_point
+        
+        # 替换函数
+        planner._fast_astar = limited_fast_astar
+        
+        # 类似地优化优化版A*
+        original_optimized_astar = planner._optimized_astar
+        
+        def limited_optimized_astar(start, end, vehicle):
+            # 计算起点终点距离
+            dist = math.dist(start, end)
+            # 设置最大点数限制
+            max_nodes = min(1000, int(dist * 10))
+            
+            # 计数变量
+            nodes_expanded = [0]
+            
+            # 覆盖内部函数
+            original_is_same_point = planner._is_same_point
+            
+            def counted_is_same_point(a, b, tolerance=EPSILON):
+                nodes_expanded[0] += 1
+                if nodes_expanded[0] > max_nodes:
+                    # 如果展开太多节点，提前结束
+                    return True
+                return original_is_same_point(a, b, tolerance)
+            
+            # 替换函数
+            planner._is_same_point = counted_is_same_point
+            
+            try:
+                return original_optimized_astar(start, end, vehicle)
+            finally:
+                # 恢复原始函数
+                planner._is_same_point = original_is_same_point
+        
+        # 替换函数
+        planner._optimized_astar = limited_optimized_astar
+    
+    # 绘制地图和测试点
+    def plot_map_and_points():
+        plt.figure(figsize=(12, 12))
+        plt.xlim(0, 150)
+        plt.ylim(0, 150)
+        plt.grid(True, alpha=0.3)
+        
+        # 绘制障碍物（如果有）
+        if hasattr(planner, 'obstacle_grids') and planner.obstacle_grids:
+            obstacle_x = [p[0] for p in planner.obstacle_grids]
+            obstacle_y = [p[1] for p in planner.obstacle_grids]
+            plt.scatter(obstacle_x, obstacle_y, c='gray', s=10, alpha=0.5, label='障碍物')
+        
+        # 绘制测试点
+        colors = ['green', 'green', 'red', 'blue']
+        markers = ['o', 'o', 's', '^']  # 不同形状：圆形、圆形、方形、三角形
+        for i, (name, coords) in enumerate(test_points.items()):
+            plt.scatter(coords[0], coords[1], c=colors[i], s=150, 
+                       marker=markers[i], edgecolors='black', zorder=100)
+            plt.text(coords[0] + 5, coords[1] + 5, name, fontsize=12, weight='bold', zorder=100)
+            
+        plt.title("路径规划测试地图 (150x150)", fontsize=16)
+        plt.xlabel("X 坐标", fontsize=14)
+        plt.ylabel("Y 坐标", fontsize=14)
+    
+    # 创建测试用的地图服务
+    print("\n步骤1: 初始化地图服务...")
+    map_service = create_simple_map(size=150, obstacle_density=0.03)
+    
+    # 创建路径规划器
+    print("\n步骤2: 创建路径规划器...")
+    planner = HybridPathPlanner(map_service)
+    
+    # 添加一些障碍物
+    generate_obstacles(planner, num_obstacles=8, obstacle_size=3)
+    
+    # 优化规划器
+    optimize_planner(planner)
+    
+    # 只测试重要的点对路径，减少计算量
+    selected_point_pairs = [
+        ("装载点1", "卸载点"),
+        ("装载点2", "卸载点"),
+        ("卸载点", "停车点"),
+        ("停车点", "装载点1"),
+        ("停车点", "装载点2"),
+        ("装载点1", "装载点2")
+    ]
+    
+    # 显示所有要测试的路径
+    print(f"\n步骤3: 将测试以下 {len(selected_point_pairs)} 条路径:")
+    for start_name, end_name in selected_point_pairs:
+        print(f"  {start_name} → {end_name}")
+    
+    # 绘制所有路径
+    plot_map_and_points()
+    
+    # 使用不同颜色绘制路径
+    cmap = plt.cm.rainbow
+    colors = [cmap(i / len(selected_point_pairs)) for i in range(len(selected_point_pairs))]
+    
+    # 路径列表，用于绘制每个路径
+    all_paths = {}
+    
+    # 规划并记录所有路径
+    print("\n步骤4: 开始路径规划测试...")
+    for i, (start_name, end_name) in enumerate(selected_point_pairs):
+        start_point = test_points[start_name]
+        end_point = test_points[end_name]
+        
+        print(f"\n规划路径: {start_name} → {end_name}")
+        start_time = time.time()
+        
+        # 对于装载点到卸载点的路径，使用满载车辆
+        if "装载点" in start_name and end_name == "卸载点":
+            test_vehicle = test_vehicles["满载车辆"]
+            print("  使用满载车辆")
+        else:
+            test_vehicle = test_vehicles["空载车辆"]
+            print("  使用空载车辆")
+        
+        # 设置超时机制
+        timeout = 5.0  # 5秒超时
+        path = None
+        
+        # 尝试规划路径
+        try:
+            # 创建线程执行规划
+            planning_thread = threading.Thread(
+                target=lambda: path.extend(planner.plan_path(start_point, end_point, test_vehicle))
+            )
+            path = []
+            
+            planning_thread.daemon = True
+            start_time = time.time()
+            planning_thread.start()
+            
+            # 等待线程完成或超时
+            planning_thread.join(timeout)
+            
+            # 检查是否超时
+            elapsed = time.time() - start_time
+            if planning_thread.is_alive():
+                print(f"  路径规划超时 ({timeout}秒)，使用直线路径")
+                path = [start_point, end_point]
+            elif not path or len(path) < 2:
+                print(f"  路径规划失败，使用直线路径")
+                path = [start_point, end_point]
+            else:
+                print(f"  路径规划成功！路径包含 {len(path)} 个点，用时 {elapsed:.3f} 秒")
+            
+            # 绘制路径
+            path_x = [p[0] for p in path]
+            path_y = [p[1] for p in path]
+            plt.plot(path_x, path_y, '-', color=colors[i], linewidth=2.5, alpha=0.7, 
+                    label=f"{start_name} → {end_name}")
+            
+            # 添加起点和终点标记
+            plt.plot(path_x[0], path_y[0], 'o', color=colors[i], markersize=8)
+            plt.plot(path_x[-1], path_y[-1], 'x', color=colors[i], markersize=8)
+            
+            # 保存路径
+            all_paths[(start_name, end_name)] = path
+        except Exception as e:
+            print(f"  路径规划异常: {str(e)}")
+            # 使用直线路径作为备用
+            path = [start_point, end_point]
+            path_x = [p[0] for p in path]
+            path_y = [p[1] for p in path]
+            plt.plot(path_x, path_y, '--', color=colors[i], linewidth=1.5, alpha=0.5, 
+                    label=f"{start_name} → {end_name} (备用)")
+            
+    # 显示图例
+    plt.legend(loc='upper right')
+    
+    # 计算路径统计信息
+    if all_paths:
+        path_lengths = {}
+        for (start_name, end_name), path in all_paths.items():
+            length = sum(math.dist(path[i], path[i+1]) for i in range(len(path)-1))
+            path_lengths[(start_name, end_name)] = length
+        
+        # 显示路径长度统计
+        print("\n步骤5: 路径长度统计:")
+        for (start_name, end_name), length in sorted(path_lengths.items(), key=lambda x: x[1]):
+            print(f"  {start_name} → {end_name}: {length:.2f} 单位")
+    
+    # 保存图片和显示
+    plt.tight_layout()
+    save_path = os.path.join(PROJECT_ROOT, "path_planning_test.png")
+    plt.savefig(save_path, dpi=150)
+    print(f"\n图像已保存到: {save_path}")
+    print("\n正在显示路径规划结果图...")
+    plt.show()
+    
+    print("\n路径规划测试完成！")
+    print("===============================================")

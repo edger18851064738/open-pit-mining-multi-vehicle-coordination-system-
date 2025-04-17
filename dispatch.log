@@ -2825,3 +2825,7 @@
 2025-03-27 14:48:56,132 - ERROR - 无效的任务类型: <class 'tuple'>
 2025-03-27 14:48:56,133 - ERROR - 无效的任务类型: <class 'tuple'>
 2025-03-27 14:48:56,133 - ERROR - 无效的任务类型: <class 'tuple'>
+2025-04-17 16:06:34,741 - root - INFO - 坐标工具初始化 | 网格尺寸:1000 原点:(0, 0)
+2025-04-17 16:06:34,968 - dispatch_integration - INFO - Path planner patched with safe fallback
+2025-04-17 16:07:58,996 - root - INFO - 坐标工具初始化 | 网格尺寸:1000 原点:(0, 0)
+2025-04-17 16:07:59,370 - dispatch_integration - INFO - Path planner patched with safe fallback

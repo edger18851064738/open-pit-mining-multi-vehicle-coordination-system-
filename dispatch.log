@@ -2829,3 +2829,241 @@
 2025-04-17 16:06:34,968 - dispatch_integration - INFO - Path planner patched with safe fallback
 2025-04-17 16:07:58,996 - root - INFO - 坐标工具初始化 | 网格尺寸:1000 原点:(0, 0)
 2025-04-17 16:07:59,370 - dispatch_integration - INFO - Path planner patched with safe fallback
+2025-04-17 17:58:59,539 - root - INFO - 坐标工具初始化 | 网格尺寸:1000 原点:(0, 0)
+2025-04-17 17:58:59,880 - root - INFO - 矿山路网初始化成功: 50x50 网格
+2025-04-17 17:58:59,884 - dispatch_integration - INFO - Path planner patched with safe fallback
+2025-04-17 17:58:59,887 - root - INFO - 调度系统初始化完成
+2025-04-17 17:58:59,889 - dispatch_integration - INFO - Enhanced scheduling cycle applied with dynamic conflict resolution
+2025-04-17 17:58:59,890 - dispatch_integration - INFO - Integrated dispatch system initialized
+2025-04-17 17:58:59,892 - dispatch_integration - INFO - Integrated system configured with default settings
+2025-04-17 17:58:59,894 - dispatch_integration - INFO - Vehicle 1 registered with dispatch system
+2025-04-17 17:58:59,896 - dispatch_integration - INFO - Vehicle 2 registered with dispatch system
+2025-04-17 17:58:59,898 - dispatch_integration - INFO - Vehicle 3 registered with dispatch system
+2025-04-17 17:58:59,900 - root - INFO - 已接收任务 TASK-01 (unloading)
+2025-04-17 17:58:59,901 - dispatch_integration - INFO - Task TASK-01 added to dispatch queue
+2025-04-17 17:58:59,903 - root - INFO - 已接收任务 TASK-02 (loading)
+2025-04-17 17:58:59,905 - dispatch_integration - INFO - Task TASK-02 added to dispatch queue
+2025-04-17 17:58:59,907 - root - INFO - 已接收任务 TASK-03 (unloading)
+2025-04-17 17:58:59,908 - dispatch_integration - INFO - Task TASK-03 added to dispatch queue
+2025-04-17 17:58:59,912 - root - INFO - 开始调度周期
+2025-04-17 17:58:59,913 - dispatch_integration - ERROR - Error in monitoring: local variable 'new_completed' referenced before assignment
+2025-04-17 17:58:59,915 - dispatch_integration - INFO - Performance Report - Uptime: 0.00h | Tasks: 0/3 | Conflicts: 0 detected, 0 resolved | Deadlocks: 0 detected, 0 resolved | Path planning failures: 0
+2025-04-17 17:58:59,916 - dispatch_integration - INFO - Dispatch service started with 5s cycle
+2025-04-17 17:58:59,917 - root - ERROR - 调度周期执行异常: name 'random' is not defined
+2025-04-17 17:58:59,919 - dispatch_integration - INFO - Path Planning Metrics - Avg planning time: 0.00毫秒 | Cache hit rate: 0.00 | Obstacle count: 0
+2025-04-17 17:59:04,937 - root - INFO - 开始调度周期
+2025-04-17 17:59:04,941 - root - ERROR - 调度周期执行异常: name 'random' is not defined
+2025-04-17 17:59:09,959 - root - INFO - 开始调度周期
+2025-04-17 17:59:09,962 - root - ERROR - 调度周期执行异常: name 'random' is not defined
+2025-04-17 17:59:14,960 - root - INFO - 已接收任务 TASK-EXTRA (manual)
+2025-04-17 17:59:14,962 - dispatch_integration - INFO - Task TASK-EXTRA added to dispatch queue
+2025-04-17 17:59:14,975 - root - INFO - 开始调度周期
+2025-04-17 17:59:14,978 - root - ERROR - 调度周期执行异常: name 'random' is not defined
+2025-04-17 17:59:19,988 - root - INFO - 开始调度周期
+2025-04-17 17:59:19,991 - root - ERROR - 调度周期执行异常: name 'random' is not defined
+2025-04-17 17:59:36,185 - root - INFO - 坐标工具初始化 | 网格尺寸:1000 原点:(0, 0)
+2025-04-17 17:59:36,414 - root - INFO - 矿山路网初始化成功: 50x50 网格
+2025-04-17 17:59:36,415 - dispatch_integration - INFO - Path planner patched with safe fallback
+2025-04-17 17:59:36,416 - root - INFO - 调度系统初始化完成
+2025-04-17 17:59:36,418 - dispatch_integration - INFO - Enhanced scheduling cycle applied with dynamic conflict resolution
+2025-04-17 17:59:36,420 - dispatch_integration - INFO - Integrated dispatch system initialized
+2025-04-17 17:59:36,421 - dispatch_integration - INFO - Integrated system configured with default settings
+2025-04-17 17:59:36,422 - dispatch_integration - INFO - Vehicle 1 registered with dispatch system
+2025-04-17 17:59:36,424 - dispatch_integration - INFO - Vehicle 2 registered with dispatch system
+2025-04-17 17:59:36,425 - dispatch_integration - INFO - Vehicle 3 registered with dispatch system
+2025-04-17 17:59:36,427 - root - INFO - 已接收任务 TASK-01 (unloading)
+2025-04-17 17:59:36,429 - dispatch_integration - INFO - Task TASK-01 added to dispatch queue
+2025-04-17 17:59:36,430 - root - INFO - 已接收任务 TASK-02 (loading)
+2025-04-17 17:59:36,431 - dispatch_integration - INFO - Task TASK-02 added to dispatch queue
+2025-04-17 17:59:36,432 - root - INFO - 已接收任务 TASK-03 (unloading)
+2025-04-17 17:59:36,433 - dispatch_integration - INFO - Task TASK-03 added to dispatch queue
+2025-04-17 17:59:36,437 - root - INFO - 开始调度周期
+2025-04-17 17:59:36,437 - dispatch_integration - ERROR - Error in monitoring: local variable 'new_completed' referenced before assignment
+2025-04-17 17:59:36,438 - dispatch_integration - INFO - Performance Report - Uptime: 0.00h | Tasks: 0/3 | Conflicts: 0 detected, 0 resolved | Deadlocks: 0 detected, 0 resolved | Path planning failures: 0
+2025-04-17 17:59:36,439 - dispatch_integration - INFO - Dispatch service started with 5s cycle
+2025-04-17 17:59:36,440 - root - INFO - 车辆 1 已接受任务 TASK-02
+2025-04-17 17:59:36,442 - dispatch_integration - INFO - Path Planning Metrics - Avg planning time: 0.00毫秒 | Cache hit rate: 0.00 | Obstacle count: 0
+2025-04-17 17:59:36,444 - root - INFO - 车辆 1 已分配任务 TASK-02
+2025-04-17 17:59:36,446 - root - ERROR - _optimized_astar出错: name 'safe_get_node' is not defined
+2025-04-17 17:59:36,447 - root - INFO - 共发现0个冲突点
+2025-04-17 17:59:36,449 - root - INFO - 调度周期成功完成，耗时: 0.010秒
+2025-04-17 17:59:41,454 - root - INFO - 开始调度周期
+2025-04-17 17:59:41,456 - root - INFO - 车辆1完成任务TASK-02
+2025-04-17 17:59:41,461 - root - INFO - 调度周期成功完成，耗时: 0.006秒
+2025-04-17 17:59:46,473 - root - INFO - 开始调度周期
+2025-04-17 17:59:46,476 - root - INFO - 生成随机任务: LOADING-1744883986 (loading)
+2025-04-17 17:59:46,484 - root - INFO - 调度周期成功完成，耗时: 0.010秒
+2025-04-17 17:59:51,466 - root - INFO - 已接收任务 TASK-EXTRA (manual)
+2025-04-17 17:59:51,467 - dispatch_integration - INFO - Task TASK-EXTRA added to dispatch queue
+2025-04-17 17:59:51,496 - root - INFO - 开始调度周期
+2025-04-17 17:59:51,499 - root - INFO - 车辆 2 已接受任务 TASK-EXTRA
+2025-04-17 17:59:51,500 - root - INFO - 车辆 2 已分配任务 TASK-EXTRA
+2025-04-17 17:59:51,501 - root - INFO - 车辆 3 已接受任务 LOADING-1744883986
+2025-04-17 17:59:51,502 - root - INFO - 车辆 3 已分配任务 LOADING-1744883986
+2025-04-17 17:59:51,503 - root - ERROR - _optimized_astar出错: name 'safe_get_node' is not defined
+2025-04-17 17:59:51,505 - root - ERROR - _optimized_astar出错: name 'safe_get_node' is not defined
+2025-04-17 17:59:51,507 - root - INFO - 共发现0个冲突点
+2025-04-17 17:59:51,513 - root - INFO - 调度周期成功完成，耗时: 0.015秒
+2025-04-17 17:59:56,526 - root - INFO - 开始调度周期
+2025-04-17 17:59:56,529 - root - INFO - 车辆2完成任务TASK-EXTRA
+2025-04-17 17:59:56,531 - root - INFO - 车辆3完成任务LOADING-1744883986
+2025-04-17 17:59:56,532 - root - ERROR - 调度周期执行异常: 车辆 3 当前状态(VehicleState.UNLOADING)无法接受新任务
+2025-04-17 18:00:06,558 - dispatch_integration - WARNING - Monitor thread did not terminate within timeout
+2025-04-17 18:00:11,561 - dispatch_integration - WARNING - Performance thread did not terminate within timeout
+2025-04-17 18:00:11,562 - dispatch_integration - INFO - Dispatch service stopped
+2025-04-17 18:01:37,282 - root - INFO - 坐标工具初始化 | 网格尺寸:1000 原点:(0, 0)
+2025-04-17 18:01:37,540 - root - INFO - 矿山路网初始化成功: 50x50 网格
+2025-04-17 18:01:37,542 - dispatch_integration - INFO - Path planner patched with safe fallback
+2025-04-17 18:01:37,544 - root - INFO - 调度系统初始化完成
+2025-04-17 18:01:37,545 - dispatch_integration - INFO - Enhanced scheduling cycle applied with dynamic conflict resolution
+2025-04-17 18:01:37,546 - dispatch_integration - INFO - Integrated dispatch system initialized
+2025-04-17 18:01:37,548 - dispatch_integration - INFO - Integrated system configured with default settings
+2025-04-17 18:01:37,549 - dispatch_integration - INFO - Vehicle 1 registered with dispatch system
+2025-04-17 18:01:37,551 - dispatch_integration - INFO - Vehicle 2 registered with dispatch system
+2025-04-17 18:01:37,553 - dispatch_integration - INFO - Vehicle 3 registered with dispatch system
+2025-04-17 18:01:37,555 - root - INFO - 已接收任务 TASK-01 (unloading)
+2025-04-17 18:01:37,556 - dispatch_integration - INFO - Task TASK-01 added to dispatch queue
+2025-04-17 18:01:37,558 - root - INFO - 已接收任务 TASK-02 (loading)
+2025-04-17 18:01:37,559 - dispatch_integration - INFO - Task TASK-02 added to dispatch queue
+2025-04-17 18:01:37,561 - root - INFO - 已接收任务 TASK-03 (unloading)
+2025-04-17 18:01:37,563 - dispatch_integration - INFO - Task TASK-03 added to dispatch queue
+2025-04-17 18:01:37,566 - root - INFO - 开始调度周期
+2025-04-17 18:01:37,567 - dispatch_integration - ERROR - Error in monitoring: local variable 'new_completed' referenced before assignment
+2025-04-17 18:01:37,568 - dispatch_integration - INFO - Performance Report - Uptime: 0.00h | Tasks: 0/3 | Conflicts: 0 detected, 0 resolved | Deadlocks: 0 detected, 0 resolved | Path planning failures: 0
+2025-04-17 18:01:37,568 - dispatch_integration - INFO - Dispatch service started with 5s cycle
+2025-04-17 18:01:37,570 - root - INFO - 车辆 1 已接受任务 TASK-02
+2025-04-17 18:01:37,571 - dispatch_integration - INFO - Path Planning Metrics - Avg planning time: 0.00毫秒 | Cache hit rate: 0.00 | Obstacle count: 0
+2025-04-17 18:01:37,574 - root - INFO - 车辆 1 已分配任务 TASK-02
+2025-04-17 18:01:37,576 - root - ERROR - _optimized_astar出错: name 'safe_get_node' is not defined
+2025-04-17 18:01:37,579 - root - INFO - 共发现0个冲突点
+2025-04-17 18:01:37,581 - root - INFO - 调度周期成功完成，耗时: 0.013秒
+2025-04-17 18:01:42,585 - root - INFO - 开始调度周期
+2025-04-17 18:01:42,587 - root - INFO - 车辆1完成任务TASK-02
+2025-04-17 18:01:42,594 - root - INFO - 调度周期成功完成，耗时: 0.008秒
+2025-04-17 18:01:47,610 - root - INFO - 开始调度周期
+2025-04-17 18:01:47,612 - root - INFO - 生成随机任务: LOADING-1744884107 (loading)
+2025-04-17 18:01:47,621 - root - INFO - 调度周期成功完成，耗时: 0.010秒
+2025-04-17 18:01:52,599 - root - INFO - 已接收任务 TASK-EXTRA (manual)
+2025-04-17 18:01:52,602 - dispatch_integration - INFO - Task TASK-EXTRA added to dispatch queue
+2025-04-17 18:01:52,631 - root - INFO - 开始调度周期
+2025-04-17 18:01:52,634 - root - INFO - 车辆 2 已接受任务 TASK-EXTRA
+2025-04-17 18:01:52,636 - root - INFO - 车辆 2 已分配任务 TASK-EXTRA
+2025-04-17 18:01:52,638 - root - INFO - 车辆 3 已接受任务 LOADING-1744884107
+2025-04-17 18:01:52,639 - root - INFO - 车辆 3 已分配任务 LOADING-1744884107
+2025-04-17 18:01:52,641 - root - ERROR - _optimized_astar出错: name 'safe_get_node' is not defined
+2025-04-17 18:01:52,642 - root - ERROR - _optimized_astar出错: name 'safe_get_node' is not defined
+2025-04-17 18:01:52,644 - root - INFO - 共发现0个冲突点
+2025-04-17 18:01:52,652 - root - INFO - 调度周期成功完成，耗时: 0.020秒
+2025-04-17 18:01:57,661 - root - INFO - 开始调度周期
+2025-04-17 18:01:57,663 - root - INFO - 车辆2完成任务TASK-EXTRA
+2025-04-17 18:01:57,664 - root - INFO - 车辆3完成任务LOADING-1744884107
+2025-04-17 18:01:57,666 - root - ERROR - 调度周期执行异常: 车辆 3 当前状态(VehicleState.UNLOADING)无法接受新任务
+2025-04-17 18:02:07,697 - dispatch_integration - WARNING - Monitor thread did not terminate within timeout
+2025-04-17 18:02:12,709 - dispatch_integration - WARNING - Performance thread did not terminate within timeout
+2025-04-17 18:02:12,713 - dispatch_integration - INFO - Dispatch service stopped
+2025-04-17 18:03:09,697 - root - INFO - 坐标工具初始化 | 网格尺寸:1000 原点:(0, 0)
+2025-04-17 18:03:09,927 - root - INFO - 矿山路网初始化成功: 50x50 网格
+2025-04-17 18:03:09,929 - dispatch_integration - INFO - Path planner patched with safe fallback
+2025-04-17 18:03:09,931 - root - INFO - 调度系统初始化完成
+2025-04-17 18:03:09,932 - dispatch_integration - INFO - Enhanced scheduling cycle applied with dynamic conflict resolution
+2025-04-17 18:03:09,934 - dispatch_integration - INFO - Integrated dispatch system initialized
+2025-04-17 18:03:09,936 - dispatch_integration - INFO - Integrated system configured with default settings
+2025-04-17 18:03:09,938 - dispatch_integration - INFO - Vehicle 1 registered with dispatch system
+2025-04-17 18:03:09,940 - dispatch_integration - INFO - Vehicle 2 registered with dispatch system
+2025-04-17 18:03:09,941 - dispatch_integration - INFO - Vehicle 3 registered with dispatch system
+2025-04-17 18:03:09,942 - root - INFO - 已接收任务 TASK-01 (unloading)
+2025-04-17 18:03:09,944 - dispatch_integration - INFO - Task TASK-01 added to dispatch queue
+2025-04-17 18:03:09,945 - root - INFO - 已接收任务 TASK-02 (loading)
+2025-04-17 18:03:09,947 - dispatch_integration - INFO - Task TASK-02 added to dispatch queue
+2025-04-17 18:03:09,948 - root - INFO - 已接收任务 TASK-03 (unloading)
+2025-04-17 18:03:09,949 - dispatch_integration - INFO - Task TASK-03 added to dispatch queue
+2025-04-17 18:03:09,953 - root - INFO - 开始调度周期
+2025-04-17 18:03:09,954 - dispatch_integration - ERROR - Error in monitoring: local variable 'new_completed' referenced before assignment
+2025-04-17 18:03:09,955 - dispatch_integration - INFO - Performance Report - Uptime: 0.00h | Tasks: 0/3 | Conflicts: 0 detected, 0 resolved | Deadlocks: 0 detected, 0 resolved | Path planning failures: 0
+2025-04-17 18:03:09,955 - dispatch_integration - INFO - Dispatch service started with 5s cycle
+2025-04-17 18:03:09,956 - root - INFO - 车辆 1 已接受任务 TASK-02
+2025-04-17 18:03:09,958 - dispatch_integration - INFO - Path Planning Metrics - Avg planning time: 0.00毫秒 | Cache hit rate: 0.00 | Obstacle count: 0
+2025-04-17 18:03:09,959 - root - INFO - 车辆 1 已分配任务 TASK-02
+2025-04-17 18:03:09,962 - root - ERROR - _optimized_astar出错: name 'safe_get_node' is not defined
+2025-04-17 18:03:09,964 - root - INFO - 共发现0个冲突点
+2025-04-17 18:03:09,965 - root - INFO - 调度周期成功完成，耗时: 0.010秒
+2025-04-17 18:03:14,978 - root - INFO - 开始调度周期
+2025-04-17 18:03:14,980 - root - INFO - 车辆1完成任务TASK-02
+2025-04-17 18:03:14,989 - root - INFO - 调度周期成功完成，耗时: 0.010秒
+2025-04-17 18:03:19,996 - root - INFO - 开始调度周期
+2025-04-17 18:03:19,998 - root - INFO - 生成随机任务: LOADING-1744884199 (loading)
+2025-04-17 18:03:20,004 - root - INFO - 调度周期成功完成，耗时: 0.007秒
+2025-04-17 18:03:24,996 - root - INFO - 已接收任务 TASK-EXTRA (manual)
+2025-04-17 18:03:24,998 - dispatch_integration - INFO - Task TASK-EXTRA added to dispatch queue
+2025-04-17 18:03:25,012 - root - INFO - 开始调度周期
+2025-04-17 18:03:25,014 - root - INFO - 车辆 2 已接受任务 TASK-EXTRA
+2025-04-17 18:03:25,015 - root - INFO - 车辆 2 已分配任务 TASK-EXTRA
+2025-04-17 18:03:25,017 - root - INFO - 车辆 3 已接受任务 LOADING-1744884199
+2025-04-17 18:03:25,018 - root - INFO - 车辆 3 已分配任务 LOADING-1744884199
+2025-04-17 18:03:25,020 - root - ERROR - _optimized_astar出错: name 'safe_get_node' is not defined
+2025-04-17 18:03:25,022 - root - ERROR - _optimized_astar出错: name 'safe_get_node' is not defined
+2025-04-17 18:03:25,023 - root - INFO - 共发现0个冲突点
+2025-04-17 18:03:25,030 - root - INFO - 调度周期成功完成，耗时: 0.017秒
+2025-04-17 18:03:30,043 - root - INFO - 开始调度周期
+2025-04-17 18:03:30,045 - root - INFO - 车辆2完成任务TASK-EXTRA
+2025-04-17 18:03:30,047 - root - INFO - 车辆3完成任务LOADING-1744884199
+2025-04-17 18:03:30,050 - root - ERROR - 调度周期执行异常: 车辆 3 当前状态(VehicleState.UNLOADING)无法接受新任务
+2025-04-17 18:03:40,071 - dispatch_integration - WARNING - Monitor thread did not terminate within timeout
+2025-04-17 18:03:45,074 - dispatch_integration - WARNING - Performance thread did not terminate within timeout
+2025-04-17 18:03:45,076 - dispatch_integration - INFO - Dispatch service stopped
+2025-04-17 18:15:07,977 - root - INFO - 坐标工具初始化 | 网格尺寸:1000 原点:(0, 0)
+2025-04-17 18:15:08,477 - root - INFO - 矿山路网初始化成功: 50x50 网格
+2025-04-17 18:15:08,480 - dispatch_integration - INFO - Path planner patched with safe fallback
+2025-04-17 18:15:08,483 - root - INFO - 调度系统初始化完成
+2025-04-17 18:15:08,486 - dispatch_integration - INFO - Enhanced scheduling cycle applied with dynamic conflict resolution
+2025-04-17 18:15:08,488 - dispatch_integration - INFO - Integrated dispatch system initialized
+2025-04-17 18:15:08,490 - dispatch_integration - INFO - Integrated system configured with default settings
+2025-04-17 18:15:08,492 - dispatch_integration - INFO - Vehicle 1 registered with dispatch system
+2025-04-17 18:15:08,495 - dispatch_integration - INFO - Vehicle 2 registered with dispatch system
+2025-04-17 18:15:08,497 - dispatch_integration - INFO - Vehicle 3 registered with dispatch system
+2025-04-17 18:15:08,499 - root - INFO - 已接收任务 TASK-01 (unloading)
+2025-04-17 18:15:08,501 - dispatch_integration - INFO - Task TASK-01 added to dispatch queue
+2025-04-17 18:15:08,504 - root - INFO - 已接收任务 TASK-02 (loading)
+2025-04-17 18:15:08,506 - dispatch_integration - INFO - Task TASK-02 added to dispatch queue
+2025-04-17 18:15:08,509 - root - INFO - 已接收任务 TASK-03 (unloading)
+2025-04-17 18:15:08,511 - dispatch_integration - INFO - Task TASK-03 added to dispatch queue
+2025-04-17 18:15:08,515 - root - INFO - 开始调度周期
+2025-04-17 18:15:08,516 - dispatch_integration - ERROR - Error in monitoring: local variable 'new_completed' referenced before assignment
+2025-04-17 18:15:08,518 - dispatch_integration - INFO - Performance Report - Uptime: 0.00h | Tasks: 0/3 | Conflicts: 0 detected, 0 resolved | Deadlocks: 0 detected, 0 resolved | Path planning failures: 0
+2025-04-17 18:15:08,519 - dispatch_integration - INFO - Dispatch service started with 5s cycle
+2025-04-17 18:15:08,521 - root - INFO - 车辆 1 已接受任务 TASK-02
+2025-04-17 18:15:08,522 - dispatch_integration - INFO - Path Planning Metrics - Avg planning time: 0.00毫秒 | Cache hit rate: 0.00 | Obstacle count: 0
+2025-04-17 18:15:08,524 - root - INFO - 车辆 1 已分配任务 TASK-02
+2025-04-17 18:15:08,528 - root - ERROR - 创建Node对象失败: 'HybridPathPlanner' object has no attribute 'global_node_pool'
+2025-04-17 18:15:08,530 - root - ERROR - 创建Node对象失败: 'HybridPathPlanner' object has no attribute 'global_node_pool'
+2025-04-17 18:15:08,531 - root - WARNING - 路径规划失败，使用备用路径: (150, 130) -> (300.0, 60.0)
+2025-04-17 18:15:08,533 - root - INFO - 共发现0个冲突点
+2025-04-17 18:15:08,535 - root - INFO - 调度周期成功完成，耗时: 0.018秒
+2025-04-17 18:15:13,551 - root - INFO - 开始调度周期
+2025-04-17 18:15:13,554 - root - INFO - 车辆1完成任务TASK-02
+2025-04-17 18:15:13,566 - root - INFO - 调度周期成功完成，耗时: 0.013秒
+2025-04-17 18:15:18,584 - root - INFO - 开始调度周期
+2025-04-17 18:15:18,587 - root - INFO - 生成随机任务: LOADING-1744884918 (loading)
+2025-04-17 18:15:18,596 - root - INFO - 调度周期成功完成，耗时: 0.010秒
+2025-04-17 18:15:23,553 - root - INFO - 已接收任务 TASK-EXTRA (manual)
+2025-04-17 18:15:23,555 - dispatch_integration - INFO - Task TASK-EXTRA added to dispatch queue
+2025-04-17 18:15:23,599 - root - INFO - 开始调度周期
+2025-04-17 18:15:23,603 - root - INFO - 车辆 2 已接受任务 TASK-EXTRA
+2025-04-17 18:15:23,606 - root - INFO - 车辆 2 已分配任务 TASK-EXTRA
+2025-04-17 18:15:23,608 - root - INFO - 车辆 3 已接受任务 LOADING-1744884918
+2025-04-17 18:15:23,610 - root - INFO - 车辆 3 已分配任务 LOADING-1744884918
+2025-04-17 18:15:23,612 - root - ERROR - 创建Node对象失败: 'HybridPathPlanner' object has no attribute 'global_node_pool'
+2025-04-17 18:15:23,614 - root - ERROR - 创建Node对象失败: 'HybridPathPlanner' object has no attribute 'global_node_pool'
+2025-04-17 18:15:23,617 - root - WARNING - 路径规划失败，使用备用路径: (200, 160) -> (250.0, 250.0)
+2025-04-17 18:15:23,619 - root - ERROR - 创建Node对象失败: 'HybridPathPlanner' object has no attribute 'global_node_pool'
+2025-04-17 18:15:23,621 - root - ERROR - 创建Node对象失败: 'HybridPathPlanner' object has no attribute 'global_node_pool'
+2025-04-17 18:15:23,623 - root - WARNING - 路径规划失败，使用备用路径: (250, 190) -> (0.0, -100.0)
+2025-04-17 18:15:23,626 - root - INFO - 共发现0个冲突点
+2025-04-17 18:15:23,636 - root - INFO - 调度周期成功完成，耗时: 0.035秒
+2025-04-17 18:15:28,642 - root - INFO - 开始调度周期
+2025-04-17 18:15:28,645 - root - INFO - 车辆2完成任务TASK-EXTRA
+2025-04-17 18:15:28,647 - root - INFO - 车辆3完成任务LOADING-1744884918
+2025-04-17 18:15:28,649 - root - ERROR - 调度周期执行异常: 车辆 3 当前状态(VehicleState.UNLOADING)无法接受新任务
+2025-04-17 18:15:38,670 - dispatch_integration - WARNING - Monitor thread did not terminate within timeout
+2025-04-17 18:15:43,676 - dispatch_integration - WARNING - Performance thread did not terminate within timeout
+2025-04-17 18:15:43,677 - dispatch_integration - INFO - Dispatch service stopped

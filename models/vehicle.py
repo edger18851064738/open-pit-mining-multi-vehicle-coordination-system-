@@ -42,450 +42,312 @@ class ConcurrentTaskError(Exception):
         super().__init__(f"Vehicle {vehicle_id} already has active task")
         self.code = "CONCURRENT_TASK"
 
+"""
+增强型矿用运输车辆实体模型
+"""
 class MiningVehicle:
-    """智能矿用运输车辆实体模型（强化状态机版本）"""
-
+    """统一状态管理的矿用运输车辆模型"""
+    
     def __init__(self, vehicle_id: int, map_service: MapService, config: Dict):
         self._state_lock = RLock()
         self.vehicle_id = vehicle_id
-        self.max_capacity = config['max_capacity']
         self.map_service = map_service
-        self.current_action = 0  # Initialize current_action with default value
-        self.current_reward = 0.0  # Initialize current_reward with default value
-        self.task_completed = False  # 标记任务是否完成
-        self.position = config.get('current_location', (0.0, 0.0))  # 添加position属性，与current_location同步
+        
+        # 容量参数
+        self.max_capacity = config.get('max_capacity', 50)
+        self.current_load = config.get('current_load', 0)
+        
+        # 性能参数
+        self.max_speed = config.get('max_speed', 5.0)
         self.turning_radius = config.get('turning_radius', 10.0)
+        self.min_hardness = config.get('min_hardness', 2.5)
         
-        # 观察者列表初始化
-        self.observers = []  # 必须初始化观察者列表
-        
-        # 坐标系统
-        self._init_coordinate_system(config)
-        
-        # 运输状态
-        self.current_task: Optional[TransportTask] = None  # 修改类型为TransportTask
-        self.current_path: List[Tuple[float, float]] = []
-        self.transport_stage: Optional[TransportStage] = None  # 初始状态应为空
-        self.path_index: int = 0
-        
-        # 设备状态
-        self.current_load: int = 0
-        self.mileage: float = 0.0
-        self.operation_hours: float = 0.0
-        self.last_brake_check: datetime = datetime.now()
-        
-        # 安全系统
-        self.fault_codes: Set[str] = set()
-        self.maintenance_records: List[Dict] = []
-        
-        # 状态回调
-        self.status_callbacks: List[Callable] = []
-        self.state: VehicleState = VehicleState.IDLE
-        # 移除冗余的status属性，统一使用state枚举管理状态
+        # 位置和路径
         self.current_location = config.get('current_location', (0.0, 0.0))
-        self.last_position = self.current_location  # 解决_update_position中的last_position未定义问题
-        self.last_update: Optional[datetime] = None  # 明确可选类型        
-
+        self.last_position = self.current_location
+        self.base_location = config.get('base_location', self.current_location)
+        self.current_path = []
+        self.path_index = 0
+        
+        # 状态系统（统一使用state枚举，移除status）
+        state_value = config.get('status', VehicleState.IDLE)
+        # 兼容处理：如果传入的是字符串，转换为枚举
+        if isinstance(state_value, str):
+            try:
+                self.state = VehicleState[state_value.upper()]
+            except KeyError:
+                self.state = VehicleState.IDLE
+        else:
+            self.state = state_value
+            
+        # 任务和阶段
+        self.current_task = None
+        self.transport_stage = None
+        
+        # 监控指标
+        self.mileage = 0.0
+        self.operation_hours = 0.0
+        self.last_update = datetime.now()
+        self.fault_codes = set()
+        self.maintenance_records = []
+        
+        # 回调管理
+        self.status_callbacks = []
+        self.observers = []
+        
+        # 性能指标
+        self.metrics = {
+            'tasks_completed': 0,
+            'total_distance': 0.0,
+            'waiting_time': 0.0,
+            'conflicts': 0
+        }
+        
     def add_observer(self, observer):
-        """添加任务观察者"""
+        """添加状态观察者"""
         with self._state_lock:
             if observer not in self.observers:
                 self.observers.append(observer)
-
+                
     def remove_observer(self, observer):
-        """移除任务观察者"""
+        """移除状态观察者"""
         with self._state_lock:
             if observer in self.observers:
                 self.observers.remove(observer)
-
+                
     def _notify_observers(self):
         """通知所有观察者状态变更"""
-        with self._state_lock:
-            for observer in self.observers:
+        for observer in self.observers:
+            try:
                 observer.update_vehicle_status(self)
-
-    def get_state_vector(self) -> List[float]:
-        """
-        获取车辆状态向量，用于强化学习
-        
-        返回:
-            List[float]: 包含以下信息的向量:
-                - 当前位置x坐标
-                - 当前位置y坐标
-                - 当前负载百分比
-                - 车辆状态编码
-                - 当前任务优先级(如有)
-                - 到目标点的距离(如有)
-        """
-        state = [
-            self.current_location[0],
-            self.current_location[1],
-            self.current_load / self.max_capacity if self.max_capacity > 0 else 0,
-            self.state.value
-        ]
-        
-        if self.current_task:
-            state.append(self.current_task.priority)
-            state.append(math.dist(self.current_location, self.current_task.end_point))
-        else:
-            state.extend([0, 0])
-            
-        return state
-        
-    def get_next_state_vector(self) -> List[float]:
-        """
-        获取车辆下一个状态的向量表示，用于强化学习
-        
-        返回:
-            List[float]: 包含以下信息的向量:
-                - 预测下一个位置x坐标
-                - 预测下一个位置y坐标
-                - 预测下一个负载百分比
-                - 预测下一个状态编码
-                - 当前任务优先级(如有)
-                - 预测到目标点的距离(如有)
-        """
-        if self.state == VehicleState.EN_ROUTE and self.current_path:
-            next_pos = self.current_path[0] if len(self.current_path) > 0 else self.current_location
-            next_dist = math.dist(next_pos, self.current_task.end_point) if self.current_task else 0
-        else:
-            next_pos = self.current_location
-            next_dist = math.dist(self.current_location, self.current_task.end_point) if self.current_task else 0
-            
-        state = [
-            next_pos[0],
-            next_pos[1],
-            self.current_load / self.max_capacity if self.max_capacity > 0 else 0,
-            self.state.value
-        ]
-        
-        if self.current_task:
-            state.append(self.current_task.priority)
-            state.append(next_dist)
-        else:
-            state.extend([0, 0])
-            
-        return state
-        
-    def _init_coordinate_system(self, config: Dict):
-        """修正坐标初始化方法"""
-        # 从配置直接获取原点坐标
-        origin = (
-            config.get('base_location', (0.0, 0.0)),  # 优先使用base_location
-            config.get('virtual_origin', (0.0, 0.0))  # 备用参数
-        )
-        
-        # 直接使用原始坐标（不再进行坐标转换）
-        self.current_location = config.get('current_location', (0.0, 0.0))
-        self.base_location = config.get('base_location', self.current_location)
-        self.min_hardness = config.get('min_hardness', 2.5)  # 新增默认值
-        self.max_speed = config.get('max_speed', 5.0)  # 新增最大速度属性
-        
-    def register_task_assignment(self, task: TransportTask) -> None:
-        """强化版任务注册方法"""
-        with self._state_lock:
-            # 严格检查current_task属性
-            if not hasattr(self, 'current_task'):
-                self.current_task = None
+            except Exception as e:
+                logging.warning(f"观察者通知失败: {str(e)}")
                 
-            # 双重检查当前任务和状态
+    def assign_task(self, task: TransportTask):
+        """分配任务给车辆"""
+        with self._state_lock:
             if self.current_task is not None:
                 raise ConcurrentTaskError(self.vehicle_id)
-            
-            # 增强状态验证
+                
             if self.state not in (VehicleState.IDLE, VehicleState.PREPARING):
-                raise ConcurrentTaskError(self.vehicle_id)
+                raise ValueError(f"车辆 {self.vehicle_id} 当前状态({self.state})无法接受新任务")
                 
-            # 验证任务准备状态
-            self._validate_task_readiness()
+            self.current_task = task
+            self.state = VehicleState.EN_ROUTE
             
-            try:
-                # 分阶段路径规划
-                approach_path, transport_path = self._plan_routes(task)
-                if not hasattr(self, 'transport_path'):
-                    self.transport_path = []
-                self._init_transport_parameters(approach_path, transport_path)
+            # 根据任务类型设置运输阶段
+            if task.task_type == "loading":
+                self.transport_stage = TransportStage.APPROACHING
+            elif task.task_type == "unloading":
+                self.transport_stage = TransportStage.TRANSPORTING
+            else:
+                self.transport_stage = TransportStage.RETURNING
                 
-                # 启动运输流程
-                self.current_task = task
-                self.state = VehicleState.EN_ROUTE
-                self._notify_status_change()
-                
-                # 添加详细日志记录
-                logging.info(f"Vehicle {self.vehicle_id} accepted task {task.task_id}")
-                logging.debug(f"Vehicle {self.vehicle_id} task details: {task.__dict__}")
-
-            except Exception as e:
-                logging.error(f"Route planning failed: {str(e)}")
-                # 重置状态以防不一致
-                self.current_task = None
-                self.state = VehicleState.IDLE
-                self._notify_status_change()
-                if isinstance(e, PathOptimizationError):
-                    raise
-                elif isinstance(e, ConcurrentTaskError):
-                    raise
-                else:
-                    raise PathOptimizationError(f"路径规划失败: {str(e)}") from e
-
-    def _plan_routes(self, task: TransportTask) -> tuple:
-        """分阶段路径规划"""
-        current_coord = (self.current_location[0], self.current_location[1])
-        task_start = (float(task.start_point[0]), float(task.start_point[1]))
-        
-        approach_result = self.map_service.plan_route(
-            start=current_coord,
-            end=task_start,
-            vehicle_type='empty'
-        )
-        transport_result = self.map_service.plan_route(
-            start=task_start,
-            end=(float(task.end_point[0]), float(task.end_point[1])),
-            vehicle_type='loaded'
-        )
-        
-        return (
-            self._parse_path(approach_result.get('path', [])),
-            self._parse_path(transport_result.get('path', []))
-        )
-
-    def _parse_path(self, raw_path: List) -> List[Tuple[float, float]]:
-        """路径数据格式标准化"""
-        try:
-            if isinstance(raw_path, dict) and 'path' in raw_path:
-                raw_path = raw_path['path']
-            return [(float(p[0]), float(p[1])) for p in raw_path]
-        except (ValueError, TypeError, IndexError) as e:
-            logging.error(f"路径解析错误: {e}, 原始路径数据: {raw_path}")
-            return []
-
-    def _plan_transport_path(self) -> List[Tuple[float, float]]:
-        """规划运输路径"""
-        if not self.current_task:
-            raise PathOptimizationError("当前没有运输任务")
+            # 记录任务分配时间
+            task.assigned_to = self.vehicle_id
+            task.assigned_time = datetime.now()
             
-        try:
-            transport_result = self.map_service.plan_route(
-                start=self.current_task.start_point,
-                end=self.current_task.end_point,
-                vehicle_type='loaded'
-            )
-            return self._parse_path(transport_result.get('path', []))
-        except Exception as e:
-            raise PathOptimizationError(f"运输路径规划失败: {str(e)}")
+            # 通知观察者
+            for callback in self.status_callbacks:
+                try:
+                    callback(self)
+                except Exception as e:
+                    logging.warning(f"状态回调执行失败: {str(e)}")
+                    
+            self._notify_observers()
+            logging.info(f"车辆 {self.vehicle_id} 已接受任务 {task.task_id}")
             
-    def _init_transport_parameters(self, approach_path: List, transport_path: List):
-        """初始化运输参数"""
-        if len(approach_path) < 2 or len(transport_path) < 2:
-            raise PathOptimizationError("无效路径规划结果")
-            
-        self.approach_path = approach_path
-        self.transport_path = transport_path
-        self.current_path = approach_path
-        self.transport_stage = TransportStage.APPROACHING
-        self.current_load = 0
-        self.vehicle_type = 'loaded' if self.current_load else 'empty'
-        
-        # Initialize path tracking variables
-        self.path_index = 0
-        
-        # Ensure transport_path is initialized
-        self.transport_path = transport_path if transport_path else []
-        
-    def perform_emergency_stop(self):
-        """增强版紧急制动"""
+    def assign_path(self, path: List[Tuple[float, float]]):
+        """分配路径给车辆"""
         with self._state_lock:
-            if self.state == VehicleState.EMERGENCY_STOP:
+            if not path:
+                logging.warning(f"车辆 {self.vehicle_id} 分配了空路径")
                 return
                 
-            self.state = VehicleState.EMERGENCY_STOP
-            self.current_path = []
-            self.path_index = 0
-            self._notify_status_change()
-            logging.warning(f"Vehicle {self.vehicle_id} 紧急制动 | 最后位置: {self.current_location}")
-
-    def perform_maintenance(self, maintenance_type: str) -> None:
-        """维护操作强化"""
-        with self._state_lock:
-            if maintenance_type == "full_service":
-                self.mileage = 0.0
-                self.operation_hours = 0.0
-                self.last_brake_check = datetime.now()
-                self.fault_codes.clear()
+            # 保存之前的路径用于指标计算
+            old_path_len = len(self.current_path) if self.current_path else 0
             
-            self.maintenance_records.append({
-                'timestamp': datetime.now(),
-                'type': maintenance_type,
-                'pre_status': self.state.name
-            })
-            logging.info(f"Vehicle {self.vehicle_id} 完成维护: {maintenance_type}")
-
-    def get_health_report(self) -> Dict:
-        """设备健康报告"""
-        with self._state_lock:
-            return {
-                'vehicle_id': self.vehicle_id,
-                'mileage': f"{self.mileage:.1f}m",
-                'operation_hours': f"{self.operation_hours/3600:.1f}h",
-                'load_status': f"{self.current_load}/{self.max_capacity}kg",
-                'last_brake_check': self.last_brake_check.isoformat(),
-                'active_faults': list(self.fault_codes)
-            }
-
-    def _notify_status_change(self):
-        """状态变更通知"""
-        for callback in self.status_callbacks:
-            try:
-                callback(self)
-            except Exception as e:
-                logging.error(f"状态回调执行失败: {str(e)}")
-
-    def update_position(self) -> None:
-        """增强版位置更新"""
+            self.current_path = path
+            self.path_index = 0
+            
+            # 确保当前位置与路径起点一致
+            if math.dist(self.current_location, path[0]) > 0.1:
+                logging.debug(f"车辆 {self.vehicle_id} 当前位置({self.current_location})与路径起点({path[0]})不一致，已自动调整")
+                self.current_location = path[0]
+                
+            # 如果重新规划了路径，记录一次冲突
+            if old_path_len > 0 and old_path_len != len(path):
+                self.metrics['conflicts'] += 1
+                
+            logging.debug(f"车辆 {self.vehicle_id} 分配了新路径，长度: {len(path)}")
+            
+    def update_position(self):
+        """更新车辆位置（沿着路径移动）"""
         with self._state_lock:
             if self.state != VehicleState.EN_ROUTE or not self.current_path:
                 return
-
-            self._advance_position()
-            self._handle_stage_transition()
-            # 添加观察者通知
-            self._notify_observers()
-
-    def _advance_position(self):
-        """推进路径点"""
-        next_index = min(self.path_index + 1, len(self.current_path)-1)
-        new_pos = self.current_path[next_index]
-        self._update_position(new_pos)
-        self.path_index = next_index
-
-    def _update_position(self, new_pos: Tuple[float, float]):
-        """原子位置更新"""
-        self.current_location = new_pos
-        self.last_update = datetime.now()
-        self.mileage += self._calculate_distance(self.last_position, new_pos)
-        self.last_position = new_pos
-
-    def _calculate_distance(self, start: Tuple[float, float], end: Tuple[float, float]) -> float:
-        """坐标距离计算"""
-        return math.hypot(end[0]-start[0], end[1]-start[1])
-
-    def _handle_stage_transition(self):
-        """处理运输阶段转换"""
-        if self.path_index < len(self.current_path)-1:
+                
+            if self.path_index >= len(self.current_path) - 1:
+                # 已到达路径终点
+                self._handle_path_completion()
+                return
+                
+            # 记录上一个位置
+            self.last_position = self.current_location
+            
+            # 更新到下一个路径点
+            self.path_index += 1
+            self.current_location = self.current_path[self.path_index]
+            
+            # 计算移动距离并更新里程
+            distance = math.dist(self.last_position, self.current_location)
+            self.mileage += distance
+            self.metrics['total_distance'] += distance
+            
+            # 记录操作时间
+            current_time = datetime.now()
+            elapsed = (current_time - self.last_update).total_seconds()
+            self.operation_hours += elapsed / 3600  # 转换为小时
+            self.last_update = current_time
+            
+            # 检查是否到达任务终点
+            if self.path_index == len(self.current_path) - 1:
+                logging.debug(f"车辆 {self.vehicle_id} 到达路径终点")
+                
+    def _handle_path_completion(self):
+        """处理路径完成事件"""
+        if not self.current_task:
             return
-
+            
+        # 根据运输阶段处理
         if self.transport_stage == TransportStage.APPROACHING:
-            self._transition_to_transport()
-        else:
+            # 从接近装载点到运输阶段
+            self.state = VehicleState.PREPARING
+            # 模拟装载过程（实际应该有延迟）
+            self.current_load = self.max_capacity
+            self.transport_stage = TransportStage.TRANSPORTING
+            logging.info(f"车辆 {self.vehicle_id} 完成装载，准备运输")
+            
+        elif self.transport_stage == TransportStage.TRANSPORTING:
+            # 从运输到卸载阶段
+            self.state = VehicleState.UNLOADING
+            # 模拟卸载过程
+            self.current_load = 0
+            self.transport_stage = TransportStage.RETURNING
+            logging.info(f"车辆 {self.vehicle_id} 完成卸载，准备返回")
+            
+        elif self.transport_stage == TransportStage.RETURNING:
+            # 完成整个任务
             self._complete_task()
-
-    def _transition_to_transport(self):
-        """切换到运输阶段"""
-        if not hasattr(self, 'transport_path') or not self.transport_path:
-            # 尝试重新规划路径
-            if hasattr(self, 'current_task') and self.current_task:
-                try:
-                    self.transport_path = self._plan_transport_path()
-                except Exception as e:
-                    raise PathOptimizationError(f"运输路径未初始化且无法重新规划: {str(e)}")
-            else:
-                raise PathOptimizationError("运输路径未初始化且无当前任务")
             
-        self.current_path = self.transport_path
-        self.path_index = 0
-        self.transport_stage = TransportStage.TRANSPORTING
-        self.current_load = self.max_capacity
-        logging.info(f"Vehicle {self.vehicle_id} 开始运输阶段")
-        
-    def _validate_task_readiness(self):
-        """新增任务准备校验"""
-        if self.state != VehicleState.IDLE:
-            raise ConcurrentTaskError(self.vehicle_id)
-
     def _complete_task(self):
-        """增强版任务完成处理（移除充电依赖）"""
-        with self._state_lock:
-            # 运输阶段状态转换 ▼▼▼
-            if self.transport_stage == TransportStage.TRANSPORTING:
-                # 切换到返回基地阶段
-                try:
-                    if hasattr(self.map_service, 'plan_return_path'):
-                        return_path = self.map_service.plan_return_path(
-                            current_pos=self.current_location,
-                            base_pos=self.base_location,
-                            vehicle_type='loaded' if self.current_load else 'empty'
-                        )
-                        if return_path:
-                            self.current_path = self._parse_path(return_path)
-                            self.path_index = 0
-                            self.transport_stage = TransportStage.RETURNING
-                            logging.info(f"车辆 {self.vehicle_id} 开始返回基地")
-                            return
-                except Exception as e:
-                    logging.error(f"返回路径规划失败: {str(e)}")
+        """完成当前任务"""
+        if not self.current_task:
+            return
             
-            # 无论如何，确保任务完成后状态重置为IDLE
-            self.transport_stage = None
-            self.state = VehicleState.IDLE
-            self.operation_hours = 0  # 移除充电计时
-            self.current_task = None
-            self.current_path = []
-            logging.info(f"车辆 {self.vehicle_id} 任务完成，进入空闲状态")
-
-    def assign_task(self, task: TransportTask):
-        """任务分配方法（修复路径初始化问题）"""
+        logging.info(f"车辆 {self.vehicle_id} 完成任务 {self.current_task.task_id}")
+        
+        # 更新任务状态
+        self.current_task.is_completed = True
+        
+        # 更新车辆状态
+        self.state = VehicleState.IDLE
+        self.transport_stage = None
+        self.current_path = []
+        self.path_index = 0
+        
+        # 更新指标
+        self.metrics['tasks_completed'] += 1
+        
+        # 保存任务引用后清除
+        completed_task = self.current_task
+        self.current_task = None
+        
+        # 通知观察者
+        for callback in self.status_callbacks:
+            try:
+                callback(self, completed_task)
+            except Exception as e:
+                logging.warning(f"完成任务回调失败: {str(e)}")
+                
+        self._notify_observers()
+        
+    def perform_emergency_stop(self):
+        """执行紧急停车"""
         with self._state_lock:
-            if hasattr(self, 'current_task') and self.current_task is not None:
-                raise ConcurrentTaskError(f"Vehicle {self.vehicle_id} already has active task {self.current_task.task_id}")
+            prev_state = self.state
+            self.state = VehicleState.EMERGENCY_STOP
+            
+            if prev_state != VehicleState.EMERGENCY_STOP:
+                logging.warning(f"车辆 {self.vehicle_id} 执行紧急停车")
+                self._notify_observers()
                 
-            self.current_task = task
-            self.transport_stage = TransportStage.APPROACHING
-            
-            # 生成模拟路径（临时方案）
-            if not self.current_path:
-                self.current_path = [
-                    (self.current_location[0] + i*0.1, 
-                    self.current_location[1] + i*0.1)
-                    for i in range(20)
-                ]
-            self.path_index = 0
-            self.state = VehicleState.EN_ROUTE
-            
-            logging.info(f"Vehicle {self.vehicle_id} 已接受任务 {task.task_id}")
-            self._notify_status_change()
-
-    def assign_path(self, path: List[Tuple[float, float]]):
-        """路径分配方法（新增）"""
+    def resume_operation(self):
+        """恢复正常运行"""
         with self._state_lock:
-            if not path:
-                raise ValueError("无效路径")
-                
-            self.current_path = path
-            self.path_index = 0
-            if self.current_location != path[0]:
-                logging.warning(f"车辆 {self.vehicle_id} 当前位置与路径起点不一致，已重置位置")
-                self.current_location = path[0]
-                
-    def move_along_path(self):
-        """沿路径移动车辆"""
-        if hasattr(self, 'state') and self.state == VehicleState.EN_ROUTE and self.current_path:
-            # 模拟移动逻辑
-            if self.path_index < len(self.current_path):
-                self.current_location = self.current_path[self.path_index]
-                self.path_index += 1
-                self.mileage += 0.5  # 模拟里程增加
-                
-            # 到达终点后重置状态
-            if self.path_index >= len(self.current_path):
-                self.state = VehicleState.IDLE
-                self.current_path = []
-                # 触发回调通知调度系统生成新任务
-                for callback in self.status_callbacks:
-                    callback(self)
+            if self.state == VehicleState.EMERGENCY_STOP:
+                if self.current_task:
+                    self.state = VehicleState.EN_ROUTE
+                else:
+                    self.state = VehicleState.IDLE
                     
-    def update_state(self):
-        """完整的状态更新方法"""
-        self.move_along_path()
+                logging.info(f"车辆 {self.vehicle_id} 恢复运行")
+                self._notify_observers()
+                
+    def perform_maintenance(self, maintenance_type: str):
+        """执行维护操作"""
+        with self._state_lock:
+            prev_state = self.state
+            
+            # 记录维护信息
+            self.maintenance_records.append({
+                'timestamp': datetime.now(),
+                'type': maintenance_type,
+                'pre_status': prev_state.name,
+                'mileage': self.mileage
+            })
+            
+            # 根据维护类型重置指标
+            if maintenance_type == 'full_service':
+                self.mileage = 0.0
+                self.operation_hours = 0.0
+                self.fault_codes.clear()
+                
+            elif maintenance_type == 'quick_check':
+                # 快速检查不重置指标，只清除故障码
+                self.fault_codes.clear()
+                
+            logging.info(f"车辆 {self.vehicle_id} 完成{maintenance_type}维护")
+            
+    def get_health_report(self) -> Dict:
+        """获取健康状态报告"""
+        with self._state_lock:
+            return {
+                'vehicle_id': self.vehicle_id,
+                'state': self.state.name,
+                'transport_stage': self.transport_stage.name if self.transport_stage else "NONE",
+                'current_load': f"{self.current_load}/{self.max_capacity}",
+                'mileage': f"{self.mileage:.1f}km",
+                'operation_hours': f"{self.operation_hours:.1f}h",
+                'faults': list(self.fault_codes),
+                'last_maintenance': self.maintenance_records[-1] if self.maintenance_records else None,
+                'position': self.current_location,
+                'metrics': {
+                    'completed_tasks': self.metrics['tasks_completed'],
+                    'total_distance': f"{self.metrics['total_distance']:.1f}",
+                    'conflicts': self.metrics['conflicts']
+                }
+            }
+            
+    def register_status_callback(self, callback):
+        """注册状态变更回调"""
+        if callback not in self.status_callbacks:
+            self.status_callbacks.append(callback)
+            
+    def unregister_status_callback(self, callback):
+        """取消状态变更回调"""
+        if callback in self.status_callbacks:
+            self.status_callbacks.remove(callback)
 
 
 if __name__ == "__main__":

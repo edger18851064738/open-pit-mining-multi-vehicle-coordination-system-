@@ -8,7 +8,7 @@ import logging
 from enum import Enum, auto
 from threading import RLock
 from datetime import datetime
-from typing import Optional, List, Tuple, Dict, Set, TYPE_CHECKING
+from typing import Optional, List, Tuple, Dict, Set, TYPE_CHECKING, Callable
 import time
 from utils.geo_tools import GeoUtils
 from utils.path_tools import PathOptimizationError
@@ -46,8 +46,45 @@ class MiningVehicle:
     """智能矿用运输车辆实体模型（强化状态机版本）"""
 
     def __init__(self, vehicle_id: int, map_service: MapService, config: Dict):
-        self.observers = []  # 观察者列表
         self._state_lock = RLock()
+        self.vehicle_id = vehicle_id
+        self.max_capacity = config['max_capacity']
+        self.map_service = map_service
+        self.current_action = 0  # Initialize current_action with default value
+        self.current_reward = 0.0  # Initialize current_reward with default value
+        self.task_completed = False  # 标记任务是否完成
+        self.position = config.get('current_location', (0.0, 0.0))  # 添加position属性，与current_location同步
+        self.turning_radius = config.get('turning_radius', 10.0)
+        
+        # 观察者列表初始化
+        self.observers = []  # 必须初始化观察者列表
+        
+        # 坐标系统
+        self._init_coordinate_system(config)
+        
+        # 运输状态
+        self.current_task: Optional[TransportTask] = None  # 修改类型为TransportTask
+        self.current_path: List[Tuple[float, float]] = []
+        self.transport_stage: Optional[TransportStage] = None  # 初始状态应为空
+        self.path_index: int = 0
+        
+        # 设备状态
+        self.current_load: int = 0
+        self.mileage: float = 0.0
+        self.operation_hours: float = 0.0
+        self.last_brake_check: datetime = datetime.now()
+        
+        # 安全系统
+        self.fault_codes: Set[str] = set()
+        self.maintenance_records: List[Dict] = []
+        
+        # 状态回调
+        self.status_callbacks: List[Callable] = []
+        self.state: VehicleState = VehicleState.IDLE
+        # 移除冗余的status属性，统一使用state枚举管理状态
+        self.current_location = config.get('current_location', (0.0, 0.0))
+        self.last_position = self.current_location  # 解决_update_position中的last_position未定义问题
+        self.last_update: Optional[datetime] = None  # 明确可选类型        
 
     def add_observer(self, observer):
         """添加任务观察者"""
@@ -130,45 +167,6 @@ class MiningVehicle:
             
         return state
         
-    def __init__(self, vehicle_id: int, map_service: MapService, config: Dict):
-        self._state_lock = RLock()
-        self.vehicle_id = vehicle_id
-        self.max_capacity = config['max_capacity']
-        self.map_service = map_service
-        self.current_action = 0  # Initialize current_action with default value
-        self.current_reward = 0.0  # Initialize current_reward with default value
-        self.task_completed = False  # 标记任务是否完成
-        self.position = config.get('current_location', (0.0, 0.0))  # 添加position属性，与current_location同步
-        self.turning_radius = config.get('turning_radius', 10.0)
-        
-        # 坐标系统
-        self._init_coordinate_system(config)
-        
-        # 运输状态
-        self.current_task: Optional[TransportTask] = None  # 修改类型为TransportTask
-        self.current_path: List[Tuple[float, float]] = []
-        self.transport_stage: Optional[TransportStage] = None  # 初始状态应为空
-        self.path_index: int = 0
-        
-        # 设备状态
-        self.current_load: int = 0
-        self.mileage: float = 0.0
-        self.operation_hours: float = 0.0
-        self.last_brake_check: datetime = datetime.now()
-        
-        # 安全系统
-        self.fault_codes: Set[str] = set()
-        self.maintenance_records: List[Dict] = []
-        
-        # 状态回调
-# 导入 Callable 以解决未定义问题
-        from typing import Callable
-        self.status_callbacks: List[Callable] = []
-        self.state: VehicleState = VehicleState.IDLE
-        # 移除冗余的status属性，统一使用state枚举管理状态
-        self.current_location = config.get('current_location', (0.0, 0.0))
-        self.last_position = self.current_location  # 解决_update_position中的last_position未定义问题
-        self.last_update: Optional[datetime] = None  # 明确可选类型        
     def _init_coordinate_system(self, config: Dict):
         """修正坐标初始化方法"""
         # 从配置直接获取原点坐标
@@ -182,6 +180,7 @@ class MiningVehicle:
         self.base_location = config.get('base_location', self.current_location)
         self.min_hardness = config.get('min_hardness', 2.5)  # 新增默认值
         self.max_speed = config.get('max_speed', 5.0)  # 新增最大速度属性
+        
     def register_task_assignment(self, task: TransportTask) -> None:
         """强化版任务注册方法"""
         with self._state_lock:
@@ -292,6 +291,7 @@ class MiningVehicle:
         
         # Ensure transport_path is initialized
         self.transport_path = transport_path if transport_path else []
+        
     def perform_emergency_stop(self):
         """增强版紧急制动"""
         with self._state_lock:
@@ -348,6 +348,8 @@ class MiningVehicle:
 
             self._advance_position()
             self._handle_stage_transition()
+            # 添加观察者通知
+            self._notify_observers()
 
     def _advance_position(self):
         """推进路径点"""
@@ -394,6 +396,7 @@ class MiningVehicle:
         self.transport_stage = TransportStage.TRANSPORTING
         self.current_load = self.max_capacity
         logging.info(f"Vehicle {self.vehicle_id} 开始运输阶段")
+        
     def _validate_task_readiness(self):
         """新增任务准备校验"""
         if self.state != VehicleState.IDLE:
@@ -406,17 +409,18 @@ class MiningVehicle:
             if self.transport_stage == TransportStage.TRANSPORTING:
                 # 切换到返回基地阶段
                 try:
-                    return_path = self.map_service.plan_return_path(
-                        current_pos=self.current_location,
-                        base_pos=self.base_location,
-                        vehicle_type='loaded' if self.current_load else 'empty'
-                    )
-                    if return_path:
-                        self.current_path = self._parse_path(return_path)
-                        self.path_index = 0
-                        self.transport_stage = TransportStage.RETURNING
-                        logging.info(f"车辆 {self.vehicle_id} 开始返回基地")
-                        return
+                    if hasattr(self.map_service, 'plan_return_path'):
+                        return_path = self.map_service.plan_return_path(
+                            current_pos=self.current_location,
+                            base_pos=self.base_location,
+                            vehicle_type='loaded' if self.current_load else 'empty'
+                        )
+                        if return_path:
+                            self.current_path = self._parse_path(return_path)
+                            self.path_index = 0
+                            self.transport_stage = TransportStage.RETURNING
+                            logging.info(f"车辆 {self.vehicle_id} 开始返回基地")
+                            return
                 except Exception as e:
                     logging.error(f"返回路径规划失败: {str(e)}")
             
@@ -461,9 +465,10 @@ class MiningVehicle:
             if self.current_location != path[0]:
                 logging.warning(f"车辆 {self.vehicle_id} 当前位置与路径起点不一致，已重置位置")
                 self.current_location = path[0]
+                
     def move_along_path(self):
         """沿路径移动车辆"""
-        if self.status == VehicleState.EN_ROUTE and self.current_path:
+        if hasattr(self, 'state') and self.state == VehicleState.EN_ROUTE and self.current_path:
             # 模拟移动逻辑
             if self.path_index < len(self.current_path):
                 self.current_location = self.current_path[self.path_index]
@@ -481,6 +486,8 @@ class MiningVehicle:
     def update_state(self):
         """完整的状态更新方法"""
         self.move_along_path()
+
+
 if __name__ == "__main__":
     import math
     from datetime import timedelta
@@ -516,6 +523,7 @@ if __name__ == "__main__":
         task_id = "T20230701"
         start_point = (10.0, 10.0)
         end_point = (50.0, 50.0)
+        priority = 1  # 添加优先级属性
 
     # 初始化车辆
     config = {'max_capacity': 5000}

@@ -209,6 +209,10 @@ class IntegratedDispatchSystem:
     def get_system_status(self) -> Dict:
         """Get the current system status."""
         with self.monitor_lock:
+            # 确保active_tasks和completed_tasks存在
+            active_tasks = getattr(self.dispatch, 'active_tasks', {})
+            completed_tasks = getattr(self.dispatch, 'completed_tasks', {})
+            
             return {
                 'timestamp': datetime.now().isoformat(),
                 'stats': self.stats.copy(),
@@ -219,8 +223,8 @@ class IntegratedDispatchSystem:
                         'has_task': v.current_task is not None
                     } for vid, v in self.dispatch.vehicles.items()
                 },
-                'active_tasks': list(self.dispatch.active_tasks.keys()),
-                'completed_tasks': list(self.dispatch.completed_tasks.keys())
+                'active_tasks': list(active_tasks.keys()) if active_tasks else [],
+                'completed_tasks': list(completed_tasks.keys()) if completed_tasks else []
             }
 
     def direct_dispatch(self, vehicle_id: int, destination: Tuple[float, float]):

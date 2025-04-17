@@ -320,6 +320,7 @@ class DispatchSystem:
         # 并发控制
         self.lock = threading.RLock()
         self.vehicle_lock = threading.Lock()
+        self.task_lock = threading.RLock()
         
         logging.info("调度系统初始化完成")
         

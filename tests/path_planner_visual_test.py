@@ -264,7 +264,7 @@ class PathPlannerVisualizer:
         
         logging.info(f"创建了 {len(points)} 个测试点")
         return points
-    
+  
     def _is_obstacle_area(self, x, y, margin=10):
         """检查点是否在障碍物区域（包括边缘）"""
         # 障碍物区域

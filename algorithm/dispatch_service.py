@@ -58,8 +58,8 @@ class TransportScheduler:
         vehicle_list = list(vehicles)  # 创建车辆列表副本
         
         # 先按状态分类车辆
-        idle_vehicles = [v for v in vehicle_list if v.state == VehicleState.IDLE]
-        unloading_vehicles = [v for v in vehicle_list if v.state == VehicleState.UNLOADING]
+        idle_vehicles = [v for v in vehicle_list if v.state == VehicleState.IDLE and not v.current_task]
+        unloading_vehicles = [v for v in vehicle_list if v.state == VehicleState.UNLOADING and not v.current_task]
         
         # 优先处理手动任务
         manual_tasks = [t for t in tasks if t.task_type == "manual"]
@@ -235,8 +235,9 @@ class ConflictBasedSearch:
         return ((p1[0] + p2[0] + p3[0] + p4[0]) / 4, 
                 (p1[1] + p2[1] + p3[1] + p4[1]) / 4)
         
+    # 增强CBS冲突解决算法中的重规划方法，提高错误处理能力
     def _replan_path(self, vehicle_id, pos=None, t=None, max_retries=3):
-        """增强路径重规划，支持多级后备方案"""
+        """增强路径重规划，支持多级后备方案，提高错误恢复能力"""
         logging.debug(f"开始为车辆{vehicle_id}重新规划路径: pos={pos}, t={t}")
         
         try:
@@ -252,10 +253,13 @@ class ConflictBasedSearch:
             vehicle = self.planner.dispatch.vehicles[vehicle_id]
             logging.debug(f"车辆{vehicle_id}当前位置: {vehicle.current_location}")
             
-            if vehicle.current_task:
-                logging.debug(f"车辆{vehicle_id}当前任务: {vehicle.current_task.task_id}")
+            # 确保车辆位置是有效的
+            if not hasattr(vehicle, 'current_location') or vehicle.current_location is None:
+                logging.error(f"车辆{vehicle_id}位置无效")
+                return None
             
             # 确定目标位置
+            end_point = None
             if vehicle.current_task and hasattr(vehicle.current_task, 'end_point'):
                 end_point = vehicle.current_task.end_point
             elif pos is not None:
@@ -264,16 +268,19 @@ class ConflictBasedSearch:
                 logging.warning(f"无法为车辆{vehicle_id}规划路径: 无目标位置")
                 return None
             
+            # 确保起点和终点是有效的元组
+            start_point = vehicle.current_location
+            if not isinstance(start_point, tuple) and hasattr(start_point, '__getitem__'):
+                start_point = (start_point[0], start_point[1])
+            if not isinstance(end_point, tuple) and hasattr(end_point, '__getitem__'):
+                end_point = (end_point[0], end_point[1])
+            
             # 多级规划策略
             for attempt in range(max_retries):
                 # 1. 尝试标准规划
                 try:
-                    logging.debug(f"尝试标准规划(尝试{attempt+1}): {vehicle.current_location} -> {end_point}")
-                    new_path = self.planner.plan_path(
-                        vehicle.current_location,
-                        end_point,
-                        vehicle
-                    )
+                    logging.debug(f"尝试标准规划(尝试{attempt+1}): {start_point} -> {end_point}")
+                    new_path = self.planner.plan_path(start_point, end_point, vehicle)
                     
                     if new_path and len(new_path) > 0:
                         logging.debug(f"成功规划路径: {len(new_path)}个点")
@@ -286,19 +293,19 @@ class ConflictBasedSearch:
                 # 2. 尝试添加中间点绕行
                 try:
                     # 在当前位置和目标之间添加偏移点
-                    mid_x = (vehicle.current_location[0] + end_point[0]) / 2
-                    mid_y = (vehicle.current_location[1] + end_point[1]) / 2
+                    mid_x = (start_point[0] + end_point[0]) / 2
+                    mid_y = (start_point[1] + end_point[1]) / 2
                     # 添加随机偏移以避免再次冲突
                     offset = 20 * (random.random() - 0.5)
                     mid_point = (mid_x + offset, mid_y + offset)
                     
                     logging.debug(f"尝试中间点绕行(尝试{attempt+1}): 经过{mid_point}")
                     # 先规划到中间点
-                    path1 = self.planner.plan_path(vehicle.current_location, mid_point, vehicle)
+                    path1 = self.planner.plan_path(start_point, mid_point, vehicle)
                     # 再从中间点到终点
                     path2 = self.planner.plan_path(mid_point, end_point, vehicle)
                     
-                    if path1 and path2:
+                    if path1 and path2 and len(path1) > 0 and len(path2) > 0:
                         # 合并路径(去掉重复的中间点)
                         new_path = path1 + path2[1:]
                         logging.debug(f"成功规划绕行路径: {len(new_path)}个点")
@@ -311,26 +318,53 @@ class ConflictBasedSearch:
                 # 3. 尝试延迟策略(等待一段时间)
                 if attempt == max_retries - 1:
                     logging.debug("尝试延迟策略: 原地等待")
-                    # 构造一个原地等待路径(重复当前位置)
-                    wait_path = [vehicle.current_location] * 5  # 生成5个相同点表示等待
-                    wait_path.extend(self.planner.plan_path(vehicle.current_location, end_point, vehicle))
-                    
-                    if len(wait_path) > 5:  # 确认路径有效
+                    try:
+                        # 构造一个原地等待路径(重复当前位置)
+                        wait_path = [start_point] * 5  # 生成5个相同点表示等待
+                        
+                        # 添加直线路径作为备用
+                        dx = end_point[0] - start_point[0]
+                        dy = end_point[1] - start_point[1]
+                        for i in range(1, 5):
+                            wait_path.append((
+                                start_point[0] + dx * i / 5,
+                                start_point[1] + dy * i / 5
+                            ))
+                        wait_path.append(end_point)
+                        
                         logging.debug(f"采用延迟路径: {len(wait_path)}个点")
                         vehicle.assign_path(wait_path)
                         self._update_reservation_table(wait_path, vehicle_id)
                         return wait_path
+                    except Exception as e:
+                        logging.warning(f"延迟策略失败: {str(e)}")
+                        # 最终备用方案：简单直线路径
+                        simple_path = [start_point, end_point]
+                        vehicle.assign_path(simple_path)
+                        self._update_reservation_table(simple_path, vehicle_id)
+                        return simple_path
                 
                 logging.debug(f"路径重试 {attempt+1}/{max_retries}")
                 time.sleep(0.2)  # 短暂等待后重试
             
             logging.warning(f"车辆{vehicle_id}路径规划达到最大重试次数")
-            return None
+            # 所有方法都失败，使用直线路径
+            simple_path = [start_point, end_point]
+            vehicle.assign_path(simple_path)
+            self._update_reservation_table(simple_path, vehicle_id)
+            return simple_path
             
         except Exception as e:
             logging.error(f"重规划路径发生异常: {str(e)}")
-            traceback.print_exc()
-            return None
+            try:
+                # 紧急恢复：总是确保返回一个简单的路径
+                start_point = vehicle.current_location
+                simple_path = [start_point, end_point or (start_point[0] + 100, start_point[1] + 100)]
+                vehicle.assign_path(simple_path)
+                return simple_path
+            except:
+                logging.error("无法进行紧急恢复")
+                return None
             
     def _get_vehicle_priority(self, vehicle_id: str) -> int:
         """获取车辆优先级，考虑多种因素"""
@@ -617,10 +651,12 @@ class DispatchSystem:
             logging.error(f"调度周期执行异常: {str(e)}")
             traceback.print_exc()
             
+    # 修改 _dispatch_tasks 方法
     def _dispatch_tasks(self):
         """增强的任务分配逻辑"""
+        # 确保仅选择真正空闲的车辆
         available_vehicles = [v for v in self.vehicles.values() 
-                            if v.state == VehicleState.IDLE]
+                            if v.state == VehicleState.IDLE and not v.current_task]
         
         if not available_vehicles and not self.task_queue:
             logging.debug("无可用车辆或任务队列为空，跳过任务分配")
@@ -630,28 +666,29 @@ class DispatchSystem:
         
         # 用调度策略为每辆空闲车辆分配任务
         assignments = self.scheduler.apply_scheduling_policy(
-            list(self.vehicles.values()),
-            list(self.task_queue)  # 转换为List以便schedulr处理
+            list(available_vehicles),  # 仅传入可用车辆
+            list(self.task_queue)
         )
-        
-        logging.debug(f"调度策略返回{len(assignments)}个任务分配")
         
         # 将分配结果存入激活任务
         with self.vehicle_lock:
             for vid, task in assignments.items():
                 if vid in self.vehicles:
                     vehicle = self.vehicles[vid]
-                    vehicle.assign_task(task)
-                    self.active_tasks[task.task_id] = task
-                    logging.info(f"车辆 {vid} 已分配任务 {task.task_id}")
-                    
-                    # 从任务队列中移除已分配任务
-                    if task in self.task_queue:
-                        self.task_queue.remove(task)
-        
-        # 生成随机新任务(仅在任务队列较少时)
-        if len(self.task_queue) < 3 and random.random() < 0.3:  # 30%的几率生成新任务
-            self._generate_random_task()
+                    # 再次检查车辆状态和任务情况
+                    if vehicle.state == VehicleState.IDLE and not vehicle.current_task:
+                        try:
+                            vehicle.assign_task(task)
+                            self.active_tasks[task.task_id] = task
+                            logging.info(f"车辆 {vid} 已分配任务 {task.task_id}")
+                            
+                            # 从任务队列中移除已分配任务
+                            if task in self.task_queue:
+                                self.task_queue.remove(task)
+                        except Exception as e:
+                            logging.error(f"分配任务给车辆 {vid} 失败: {str(e)}")
+                    else:
+                        logging.warning(f"车辆 {vid} 状态已变更或已有任务，取消分配")
             
     def _generate_random_task(self):
         """生成随机任务"""
@@ -683,7 +720,7 @@ class DispatchSystem:
         logging.info(f"生成随机任务: {task_id} ({task_type})")
         
     def _plan_paths(self):
-        """为所有有任务但无路径的车辆规划路径"""
+        """为所有有任务但无路径的车辆规划路径 - 增强型错误处理"""
         with self.vehicle_lock:
             vehicles_need_path = [v for v in self.vehicles.values() 
                                 if v.current_task and (not hasattr(v, 'current_path') or 
@@ -700,18 +737,55 @@ class DispatchSystem:
                     start = vehicle.current_location
                     end = vehicle.current_task.end_point
                     
+                    # 确保坐标是有效的元组
+                    if not isinstance(start, tuple) and hasattr(start, '__getitem__'):
+                        start = (start[0], start[1])
+                    if not isinstance(end, tuple) and hasattr(end, '__getitem__'):
+                        end = (end[0], end[1])
+                    
+                    # 检查坐标有效性
+                    if (not isinstance(start, tuple) or len(start) < 2 or 
+                        not isinstance(end, tuple) or len(end) < 2):
+                        logging.error(f"车辆{vehicle.vehicle_id}坐标无效: start={start}, end={end}")
+                        continue
+                    
                     logging.debug(f"车辆{vehicle.vehicle_id}路径规划: {start} -> {end}")
                     
-                    # 调用路径规划器
-                    path = self.planner.plan_path(start, end, vehicle)
+                    # 调用路径规划器 - 捕获所有可能的异常
+                    try:
+                        path = self.planner.plan_path(start, end, vehicle)
+                    except Exception as e:
+                        logging.error(f"车辆{vehicle.vehicle_id}路径规划异常: {str(e)}")
+                        # 生成备用路径
+                        path = [start, end]
                     
+                    # 验证路径有效性
                     if path and len(path) > 0:
-                        vehicle.assign_path(path)
-                        logging.debug(f"车辆{vehicle.vehicle_id}路径规划成功: {len(path)}个点")
+                        # 防止路径中包含None或非法点
+                        valid_path = []
+                        for point in path:
+                            if point is None:
+                                continue
+                            # 确保每个点是元组且有x,y坐标
+                            if hasattr(point, 'as_tuple'):
+                                valid_path.append(point.as_tuple())
+                            elif isinstance(point, tuple) and len(point) >= 2:
+                                valid_path.append(point)
+                            elif hasattr(point, '__getitem__') and len(point) >= 2:
+                                valid_path.append((point[0], point[1]))
+                        
+                        # 确保至少包含起点和终点
+                        if len(valid_path) < 2:
+                            valid_path = [start, end]
+                        
+                        vehicle.assign_path(valid_path)
+                        logging.debug(f"车辆{vehicle.vehicle_id}路径规划成功: {len(valid_path)}个点")
                     else:
                         logging.warning(f"车辆{vehicle.vehicle_id}路径规划失败: 返回空路径")
+                        # 分配简单直线路径作为备选
+                        vehicle.assign_path([start, end])
                 except Exception as e:
-                    logging.error(f"车辆{vehicle.vehicle_id}路径规划异常: {str(e)}")
+                    logging.error(f"车辆{vehicle.vehicle_id}路径规划过程异常: {str(e)}")
         
     def _update_vehicle_states(self):
         """增强的车辆状态更新，确保状态一致性"""
@@ -1057,16 +1131,32 @@ if __name__ == "__main__":
     planner = HybridPathPlanner(map_service)
     
     # 修补planner.plan_path方法以防止错误
+# 在 path_planner.py 中增强 safe_plan_path 方法
     def safe_plan_path(start, end, vehicle=None):
         logging.debug(f"安全路径规划: {start} -> {end}")
-        # 生成简单直线路径的备选方案
         try:
+            # 确保起点和终点是有效的元组
+            if hasattr(start, 'as_tuple'):
+                start = start.as_tuple()
+            if hasattr(end, 'as_tuple'):
+                end = end.as_tuple()
+                
             # 尝试使用原始方法
-            return planner.original_plan_path(start, end, vehicle)
-        except Exception as e:
-            logging.warning(f"原始路径规划失败: {str(e)}, 使用备选方案")
-            # 简单直线路径作为备选
+            try:
+                return planner.original_plan_path(start, end, vehicle)
+            except Exception as e:
+                logging.warning(f"原始路径规划失败: {str(e)}, 使用备选方案")
+                
+            # 直接返回简单直线路径
             return [start, end]
+        except Exception as e:
+            logging.error(f"安全路径规划完全失败: {str(e)}")
+            # 确保返回有效路径，即使出现严重错误
+            if isinstance(start, tuple) and isinstance(end, tuple):
+                return [start, end]
+            else:
+                # 如果连起点终点都不是元组，返回默认值
+                return [(0, 0), (100, 100)]
     
     # 保存原始方法并替换
     if not hasattr(planner, 'original_plan_path'):

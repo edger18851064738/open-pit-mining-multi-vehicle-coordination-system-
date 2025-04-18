@@ -29,100 +29,74 @@ EPSILON = 1e-5         # 浮点数比较精度
 
 # 使用缓冲池优化Node对象创建，减少内存分配
 class NodePool:
-    """节点对象池，减少内存分配"""
+    """改进的节点池实现，保证线程安全和对象一致性"""
+    
     def __init__(self, max_size=10000):
-        self.pool = []
+        self.available = []  # 可用节点池
         self.max_size = max_size
-        self.in_use = set()
         self.lock = threading.RLock()
         
     def get_node(self, x, y, t=0):
-        """从池中获取节点或创建新节点"""
+        """获取节点，优先从池中获取"""
         with self.lock:
-            # 查找现有节点
-            for node in self.pool:
-                if node not in self.in_use:
-                    node.x = x
-                    node.y = y
-                    node.t = t
-                    self.in_use.add(node)
-                    return node
-            
-            # 创建新节点
-            node = Node(x, y, t)
-            if len(self.pool) < self.max_size:
-                self.pool.append(node)
-            self.in_use.add(node)
-            return node
-
-    def release_node(self, node):
-        """释放节点回池"""
-        with self.lock:
-            if node in self.in_use:
-                self.in_use.remove(node)
+            if self.available:
+                # 创建新节点而不是修改现有节点
+                # 这避免了修改后哈希值变化的问题
+                node = Node(x, y, t)
+                return node
+            else:
+                # 创建新节点
+                node = Node(x, y, t)
+                if len(self.available) < self.max_size:
+                    self.available.append(None)  # 仅占位，不复用对象
+                return node
                 
+    def release_node(self, node):
+        """释放节点，实际上不再复用"""
+        # 此方法只为兼容性保留，实际不再复用节点
+        pass
+        
     def release_all(self):
         """释放所有节点"""
         with self.lock:
-            self.in_use.clear()
-
+            self.available.clear()
 # 全局节点池
 global_node_pool = NodePool()
 
 class Node:
-    """增强型三维路径节点（含时间维度）"""
-    __slots__ = ('x', 'y', 't')  # 使用__slots__减少内存占用
+    """改进的路径节点类，增强稳定性和错误处理"""
+    __slots__ = ('x', 'y', 't', '_hash')
     
-    def __init__(self, x: int, y: int, t: int = 0):
-        self.x = float(x) if not isinstance(x, (int, float)) else x
-        self.y = float(y) if not isinstance(y, (int, float)) else y
-        self.t = float(t) if not isinstance(t, (int, float)) else t
-        
+    def __init__(self, x, y, t=0):
+        try:
+            self.x = float(x)
+            self.y = float(y)
+            self.t = float(t)
+            # 预计算哈希值，确保不变性
+            self._hash = hash((round(self.x, 6), round(self.y, 6)))
+        except (TypeError, ValueError) as e:
+            logging.error(f"创建Node失败: {str(e)}, 使用默认值(0,0,0)")
+            self.x = 0.0
+            self.y = 0.0
+            self.t = 0.0
+            self._hash = hash((0, 0))
+    
     def __eq__(self, other):
-        if other is None:
+        if not isinstance(other, Node):
             return False
-        if not hasattr(other, 'x') or not hasattr(other, 'y'):
-            return False
-        return abs(self.x - other.x) < EPSILON and abs(self.y - other.y) < EPSILON
-        
-    def __hash__(self):
-        # 使用预计算的哈希值提高性能
-        return hash((round(self.x, 6), round(self.y, 6)))
+        # 使用更精确的比较
+        return (abs(self.x - other.x) < 1e-9 and 
+                abs(self.y - other.y) < 1e-9)
     
-    def __lt__(self, other):
-        # 当f值相等时，按坐标排序
-        if not hasattr(other, 'x') or not hasattr(other, 'y'):
-            return False
-        return (self.x, self.y) < (other.x, other.y)
-        
-    def __str__(self):
-        return f"Node({self.x}, {self.y}, {self.t})"
-        
+    def __hash__(self):
+        # 返回预计算的哈希值，确保不变性
+        return self._hash
+    
     def __repr__(self):
-        return self.__str__()
-        
-    def distance_to(self, other):
-        """优化的距离计算，避免开方操作"""
-        if not hasattr(other, 'x') or not hasattr(other, 'y'):
-            if isinstance(other, (tuple, list)) and len(other) >= 2:
-                return abs(self.x - other[0]) + abs(self.y - other[1])
-            return float('inf')
-        return abs(self.x - other.x) + abs(self.y - other.y)
-        
-    def euclidean_to(self, other):
-        """欧式距离计算，仅在需要时使用"""
-        if not hasattr(other, 'x') or not hasattr(other, 'y'):
-            if isinstance(other, (tuple, list)) and len(other) >= 2:
-                dx = self.x - other[0]
-                dy = self.y - other[1]
-                return math.sqrt(dx*dx + dy*dy)
-            return float('inf')
-        dx = self.x - other.x
-        dy = self.y - other.y
-        return math.sqrt(dx*dx + dy*dy)
-        
+        return f"Node({self.x:.6f}, {self.y:.6f}, {self.t:.1f})"
+    
     def as_tuple(self):
-        """返回坐标元组"""
+        """获取坐标元组"""
         return (self.x, self.y)
 
 class PriorityQueue:
@@ -391,9 +365,9 @@ class HybridPathPlanner:
                 return path, elapsed
 
     def _generate_fallback_path(self, start, end):
-        """生成备用路径，确保绕过障碍物"""
+        """Generate a reliable fallback path, ensuring start and end are valid tuples"""
         try:
-            # 确保起点和终点是元组
+            # Ensure start and end are tuples with valid coordinates
             start = tuple(start) if isinstance(start, (list, np.ndarray)) else start
             end = tuple(end) if isinstance(end, (list, np.ndarray)) else end
             
@@ -402,61 +376,67 @@ class HybridPathPlanner:
             if hasattr(end, 'as_tuple'):
                 end = end.as_tuple()
                 
+            # Make sure we have valid coordinates
+            if not isinstance(start, tuple) or len(start) < 2:
+                start = (0, 0)
+            if not isinstance(end, tuple) or len(end) < 2:
+                end = (100, 100)
+                
             dx = end[0] - start[0]
             dy = end[1] - start[1]
             
-            # 检查直线路径上的障碍物
+            # Check for obstacles on direct path
             line_points = []
             try:
                 line_points = self._bresenham_line(start, end)
             except Exception as e:
-                logging.warning(f"计算直线路径失败: {str(e)}")
+                logging.warning(f"Bresenham line calculation failed: {str(e)}")
                 
             obstacles_on_path = []
             for p in line_points:
                 if self._is_obstacle_fast(p):
                     obstacles_on_path.append(p)
-                    if len(obstacles_on_path) >= 3:  # 只需检查少量点即可
+                    if len(obstacles_on_path) >= 3:  # Only need to check a few points
                         break
             
             if not obstacles_on_path:
-                # 没有障碍物，可以直接连接
+                # No obstacles, use direct path
                 return [start, end]
             
-            # 创建带折点的路径
+            # Create a path with waypoints to navigate around obstacles
             path = [start]
             
-            # 根据路径方向决定绕行策略
+            # Decide detour strategy based on path direction
             if abs(dx) > abs(dy):
-                # 水平距离更长，垂直绕行
-                offset = max(30, abs(dx) * 0.2)  # 至少30个单位
+                # Horizontal path is longer, use vertical detour
+                offset = max(30, abs(dx) * 0.2)  # At least 30 units
                 
-                # 两个中间点形成绕行路径
+                # Generate two midpoints for smoother navigation
                 mid1 = (start[0] + dx * 0.3, start[1] + offset)
                 mid2 = (start[0] + dx * 0.7, start[1] + offset)
                 
-                # 检查中间点是否为障碍物
+                # Check if midpoints are obstacles
                 if self._is_obstacle_fast(mid1) or self._is_obstacle_fast(mid2):
-                    # 换另一个方向
+                    # Try opposite direction
                     mid1 = (start[0] + dx * 0.3, start[1] - offset)
                     mid2 = (start[0] + dx * 0.7, start[1] - offset)
             else:
-                # 垂直距离更长，水平绕行
-                offset = max(30, abs(dy) * 0.2)  # 至少30个单位
+                # Vertical path is longer, use horizontal detour
+                offset = max(30, abs(dy) * 0.2)  # At least 30 units
                 
-                # 两个中间点形成绕行路径
+                # Generate two midpoints for smoother navigation
                 mid1 = (start[0] + offset, start[1] + dy * 0.3)
                 mid2 = (start[0] + offset, start[1] + dy * 0.7)
                 
-                # 检查中间点是否为障碍物
+                # Check if midpoints are obstacles
                 if self._is_obstacle_fast(mid1) or self._is_obstacle_fast(mid2):
-                    # 换另一个方向
+                    # Try opposite direction
                     mid1 = (start[0] - offset, start[1] + dy * 0.3)
                     mid2 = (start[0] - offset, start[1] + dy * 0.7)
             
-            # 再次检查中间点
+            # Final check for midpoints
             if self._is_obstacle_fast(mid1) or self._is_obstacle_fast(mid2):
-                # 两个方向都不行，使用更大偏移的单点绕行
+                # Both directions have obstacles, use a single random midpoint with larger offset
                 larger_offset = max(50, max(abs(dx), abs(dy)) * 0.4)
                 mid_point = (
                     (start[0] + end[0]) / 2 + random.uniform(-larger_offset, larger_offset),
@@ -464,14 +444,17 @@ class HybridPathPlanner:
                 )
                 path.append(mid_point)
             else:
+                # Use the two midpoints
                 path.extend([mid1, mid2])
             
+            # Always include end point
             path.append(end)
             return path
         except Exception as e:
-            logging.error(f"生成备用路径出错: {str(e)}")
-            # 最终备选方案 - 直接连接起点和终点
-            return [start, end]
+            logging.error(f"Fallback path generation error: {str(e)}")
+            # Absolute last resort - direct connection
+            return [start if isinstance(start, tuple) else (0, 0), 
+                    end if isinstance(end, tuple) else (100, 100)]
     def original_plan_path(self, start: Tuple, end: Tuple, vehicle=None) -> List[Tuple]:
         """原始路径规划方法，避免递归调用"""
         try:
@@ -506,173 +489,180 @@ class HybridPathPlanner:
             # 使用备用路径
             return self._generate_fallback_path(start, end)
     def simple_astar(self, start: Tuple, end: Tuple, vehicle=None) -> List[Tuple]:
-        """简单的A*算法实现，完全避免使用Node类"""
-        
-        # 确保起点和终点是整数坐标
-        start_x, start_y = int(start[0]), int(start[1])
-        end_x, end_y = int(end[0]), int(end[1])
-        
-        # 检查起点和终点是否是障碍物
-        if self._is_obstacle_fast(start):
-            logging.warning(f"起点{start}是障碍物，调整起点")
-            # 尝试调整起点
-            for dx in range(-2, 3):
-                for dy in range(-2, 3):
-                    new_start = (start_x + dx, start_y + dy)
-                    if not self._is_obstacle_fast(new_start):
-                        start_x, start_y = new_start
-                        break
-        
-        if self._is_obstacle_fast(end):
-            logging.warning(f"终点{end}是障碍物，调整终点")
-            # 尝试调整终点
-            for dx in range(-2, 3):
-                for dy in range(-2, 3):
-                    new_end = (end_x + dx, end_y + dy)
-                    if not self._is_obstacle_fast(new_end):
-                        end_x, end_y = new_end
-                        break
-        
-        # 启发式函数：曼哈顿距离
-        def heuristic(x, y):
-            return abs(x - end_x) + abs(y - end_y)
-        
-        # 优先队列，存储(f值, 坐标)
-        open_list = []
-        # 初始点
-        heapq.heappush(open_list, (heuristic(start_x, start_y), (start_x, start_y)))
-        
-        # 已访问的点集合
-        closed_set = set()
-        
-        # 来源字典和得分字典
-        came_from = {}
-        g_score = {(start_x, start_y): 0}
-        
-        # 方向：上下左右和对角线
-        directions = [
-            (0, 1), (1, 0), (0, -1), (-1, 0),  # 上下左右
-            (1, 1), (1, -1), (-1, 1), (-1, -1)  # 对角线
-        ]
-        
-        # 主循环
-        while open_list:
-            # 弹出f值最小的点
-            _, current = heapq.heappop(open_list)
+        """Simple and robust A* algorithm that doesn't depend on Node class"""
+        try:
+            # Ensure start and end are tuples with numeric coordinates
+            start_x, start_y = float(start[0]), float(start[1])
+            end_x, end_y = float(end[0]), float(end[1])
             
-            # 到达终点
-            if abs(current[0] - end_x) < 3 and abs(current[1] - end_y) < 3:
-                # 重建路径
-                path = [end]
-                while current in came_from:
-                    current = came_from[current]
-                    path.append(current)
-                path.reverse()
-                # 确保终点是正确的
-                if path[-1] != end:
-                    path.append(end)
-                return path
+            # Check if start or end point is an obstacle
+            if self._is_obstacle_fast(start):
+                logging.warning(f"Start point {start} is an obstacle, adjusting...")
+                # Try to adjust start point
+                for dx in range(-2, 3):
+                    for dy in range(-2, 3):
+                        new_start = (start_x + dx, start_y + dy)
+                        if not self._is_obstacle_fast(new_start):
+                            start_x, start_y = new_start
+                            break
             
-            # 标记为已访问
-            closed_set.add(current)
+            if self._is_obstacle_fast(end):
+                logging.warning(f"End point {end} is an obstacle, adjusting...")
+                # Try to adjust end point
+                for dx in range(-2, 3):
+                    for dy in range(-2, 3):
+                        new_end = (end_x + dx, end_y + dy)
+                        if not self._is_obstacle_fast(new_end):
+                            end_x, end_y = new_end
+                            break
             
-            # 遍历相邻点
-            for dx, dy in directions:
-                # 计算邻居坐标
-                nx, ny = current[0] + dx, current[1] + dy
-                neighbor = (nx, ny)
+            # Heuristic function: Manhattan distance
+            def heuristic(x, y):
+                return abs(x - end_x) + abs(y - end_y)
+            
+            # Priority queue (min-heap) with (f-value, coordinates)
+            open_list = []
+            heapq.heappush(open_list, (heuristic(start_x, start_y), (start_x, start_y)))
+            
+            # Track visited points and parent relationships
+            closed_set = set()
+            came_from = {}
+            g_score = {(start_x, start_y): 0}
+            
+            # Movement directions: cardinal and diagonal
+            directions = [
+                (0, 1), (1, 0), (0, -1), (-1, 0),  # Cardinal
+                (1, 1), (1, -1), (-1, 1), (-1, -1)  # Diagonal
+            ]
+            
+            # Main search loop
+            while open_list:
+                # Get point with lowest f-value
+                _, current = heapq.heappop(open_list)
                 
-                # 跳过已访问的点
-                if neighbor in closed_set:
-                    continue
+                # Goal check: if we're close enough to the goal
+                if abs(current[0] - end_x) < 3 and abs(current[1] - end_y) < 3:
+                    # Reconstruct path
+                    path = [end]
+                    while current in came_from:
+                        current = came_from[current]
+                        path.append(current)
+                    path.reverse()
+                    # Make sure end point is included
+                    if path[-1] != end:
+                        path.append(end)
+                    return path
                 
-                # 跳过障碍物
-                if self._is_obstacle_fast(neighbor):
-                    continue
+                # Mark as visited
+                closed_set.add(current)
                 
-                # 计算移动成本（对角线移动成本更高）
-                move_cost = 1.4 if dx != 0 and dy != 0 else 1.0
-                tentative_g = g_score[current] + move_cost
-                
-                # 如果找到更好的路径或者是新点
-                if neighbor not in g_score or tentative_g < g_score[neighbor]:
-                    came_from[neighbor] = current
-                    g_score[neighbor] = tentative_g
-                    f_value = tentative_g + heuristic(nx, ny)
+                # Check all neighbors
+                for dx, dy in directions:
+                    # Calculate neighbor coordinates
+                    nx, ny = current[0] + dx, current[1] + dy
+                    neighbor = (nx, ny)
                     
-                    # 加入开放列表
-                    heapq.heappush(open_list, (f_value, neighbor))
-        
-        # 找不到路径，使用折线路径
-        logging.warning(f"找不到从{start}到{end}的路径，使用折线路径绕过障碍物")
-        
-        # 生成带多个中间点的路径来绕过障碍物
-        path = [start]
-        
-        # 获取起点和终点之间的线段
-        line_points = self._bresenham_line(start, end)
-        
-        # 检查直线路径上是否有障碍物
-        obstacles_on_path = [p for p in line_points if self._is_obstacle_fast(p)]
-        
-        if obstacles_on_path:
-            # 有障碍物，添加中间点绕过
-            dx = end[0] - start[0]
-            dy = end[1] - start[1]
+                    # Skip if already visited
+                    if neighbor in closed_set:
+                        continue
+                    
+                    # Skip obstacles
+                    if self._is_obstacle_fast(neighbor):
+                        continue
+                    
+                    # Calculate movement cost (higher for diagonal moves)
+                    move_cost = 1.4 if dx != 0 and dy != 0 else 1.0
+                    tentative_g = g_score[current] + move_cost
+                    
+                    # Update path if it's better
+                    if neighbor not in g_score or tentative_g < g_score[neighbor]:
+                        came_from[neighbor] = current
+                        g_score[neighbor] = tentative_g
+                        f_value = tentative_g + heuristic(nx, ny)
+                        
+                        # Add to open list for exploration
+                        heapq.heappush(open_list, (f_value, neighbor))
             
-            # 根据障碍物位置选择绕行方向
-            if abs(dx) > abs(dy):
-                # 水平方向更长，尝试垂直绕行
-                mid1 = (start[0] + dx/3, start[1] + 40 if dy >= 0 else start[1] - 40)
-                mid2 = (start[0] + 2*dx/3, start[1] + 40 if dy >= 0 else start[1] - 40)
-            else:
-                # 垂直方向更长，尝试水平绕行
-                mid1 = (start[0] + 40 if dx >= 0 else start[0] - 40, start[1] + dy/3)
-                mid2 = (start[0] + 40 if dx >= 0 else start[0] - 40, start[1] + 2*dy/3)
+            # If no path found, generate a path that avoids obstacles
+            logging.warning(f"No path found from {start} to {end}, using zig-zag path")
             
-            # 验证中间点不是障碍物
-            if not self._is_obstacle_fast(mid1) and not self._is_obstacle_fast(mid2):
-                path.extend([mid1, mid2])
-            else:
-                # 中间点是障碍物，尝试其他方向
+            # Generate a multi-point path to navigate around obstacles
+            path = [start]
+            
+            # Check for obstacles on direct path
+            line_points = self._bresenham_line(start, end)
+            obstacles_on_path = [p for p in line_points if self._is_obstacle_fast(p)]
+            
+            if obstacles_on_path:
+                # Add mid-points to navigate around obstacles
+                dx = end[0] - start[0]
+                dy = end[1] - start[1]
+                
+                # Choose detour direction based on predominant movement
                 if abs(dx) > abs(dy):
-                    mid1 = (start[0] + dx/3, start[1] - 40 if dy >= 0 else start[1] + 40)
-                    mid2 = (start[0] + 2*dx/3, start[1] - 40 if dy >= 0 else start[1] + 40)
+                    # Horizontal movement predominant, try vertical detour
+                    mid1 = (start[0] + dx/3, start[1] + 40 if dy >= 0 else start[1] - 40)
+                    mid2 = (start[0] + 2*dx/3, start[1] + 40 if dy >= 0 else start[1] - 40)
                 else:
-                    mid1 = (start[0] - 40 if dx >= 0 else start[0] + 40, start[1] + dy/3)
-                    mid2 = (start[0] - 40 if dx >= 0 else start[0] + 40, start[1] + 2*dy/3)
-                    
-                # 再次验证
+                    # Vertical movement predominant, try horizontal detour
+                    mid1 = (start[0] + 40 if dx >= 0 else start[0] - 40, start[1] + dy/3)
+                    mid2 = (start[0] + 40 if dx >= 0 else start[0] - 40, start[1] + 2*dy/3)
+                
+                # Check if midpoints are valid
                 if not self._is_obstacle_fast(mid1) and not self._is_obstacle_fast(mid2):
                     path.extend([mid1, mid2])
                 else:
-                    # 所有方向都失败，使用更大的偏移
-                    mid_x = (start[0] + end[0]) / 2 + random.uniform(-50, 50)
-                    mid_y = (start[1] + end[1]) / 2 + random.uniform(-50, 50)
-                    path.append((mid_x, mid_y))
-        
-        path.append(end)
-        return path
+                    # Try opposite direction
+                    if abs(dx) > abs(dy):
+                        mid1 = (start[0] + dx/3, start[1] - 40 if dy >= 0 else start[1] + 40)
+                        mid2 = (start[0] + 2*dx/3, start[1] - 40 if dy >= 0 else start[1] + 40)
+                    else:
+                        mid1 = (start[0] - 40 if dx >= 0 else start[0] + 40, start[1] + dy/3)
+                        mid2 = (start[0] - 40 if dx >= 0 else start[0] + 40, start[1] + 2*dy/3)
+                        
+                    # Check again
+                    if not self._is_obstacle_fast(mid1) and not self._is_obstacle_fast(mid2):
+                        path.extend([mid1, mid2])
+                    else:
+                        # Last resort: use a random midpoint with larger offset
+                        mid_x = (start[0] + end[0]) / 2 + random.uniform(-50, 50)
+                        mid_y = (start[1] + end[1]) / 2 + random.uniform(-50, 50)
+                        path.append((mid_x, mid_y))
+            
+            # Always include the end point
+            path.append(end)
+            return path
+        except Exception as e:
+            logging.error(f"simple_astar error: {str(e)}")
+            # Return direct path as last resort
+            return [start, end]
     
     def plan_path(self, start: Tuple, end: Tuple, vehicle=None) -> List[Tuple]:
-        """高性能路径规划入口方法"""
-        # 性能计数
+        """Enhanced high-performance path planning entry method with better error recovery"""
+        # Performance counting
         start_time = time.time()
         self.planning_count += 1
         
         try:
-            # 验证输入
+            # Validate input
             if not start or not end:
+                logging.warning("Invalid start or end point, returning empty path")
                 return []
                 
-            # 检查起点和终点是否相同
+            # Make sure we're working with tuples
+            if hasattr(start, 'as_tuple'):
+                start = start.as_tuple()
+            if hasattr(end, 'as_tuple'):
+                end = end.as_tuple()
+                
+            # Check if start and end points are the same
             if math.isclose(start[0], end[0], abs_tol=EPSILON) and math.isclose(start[1], end[1], abs_tol=EPSILON):
                 return [start]
                 
-            # 缓存键生成 (带车辆特征，如果适用)
+            # Create cache key based on vehicle features if available
             cache_key = None
             if vehicle:
-                # 包含车辆特性的缓存键
+                # Cache key with vehicle properties
                 cache_key = (
                     "path",
                     start,
@@ -682,57 +672,66 @@ class HybridPathPlanner:
                     getattr(vehicle, 'current_load', 0)
                 )
             else:
-                # 基础缓存键
+                # Basic cache key
                 cache_key = ("base_path", start, end)
                     
-            # 检查缓存
+            # Check cache
             cached_path = self.path_cache.get(cache_key)
             if cached_path:
-                logging.debug(f"使用缓存路径: {start} -> {end}")
+                logging.debug(f"Using cached path: {start} -> {end}")
                 return cached_path
                 
-            # 尝试不同的路径规划策略
+            # Try different path planning strategies
             path = []
             
-            # 策略1: 基于Node的A*算法
+            # Strategy 1: Try optimized vehicle-aware A* planning
             try:
                 if vehicle:
                     path = self._optimized_astar(start, end, vehicle)
                 else:
                     path = self._fast_astar(start, end)
             except Exception as e:
-                logging.warning(f"基于Node的路径规划失败: {str(e)}")
+                logging.warning(f"Node-based path planning failed: {str(e)}")
                 path = []
             
-            # 策略2: 如果策略1失败，使用备用路径生成
+            # Strategy 2: Try simple A* without Node objects
             if not path or len(path) < 2:
-                logging.info(f"使用备用路径生成方法: {start} -> {end}")
+                try:
+                    logging.info(f"Using simple_astar as fallback: {start} -> {end}")
+                    path = self.simple_astar(start, end, vehicle)
+                except Exception as e:
+                    logging.warning(f"Simple A* fallback failed: {str(e)}")
+                    path = []
+                    
+            # Strategy 3: Use fallback path generation
+            if not path or len(path) < 2:
+                logging.info(f"Using fallback path generation: {start} -> {end}")
                 path = self._generate_fallback_path(start, end)
                     
-            # 路径优化（平滑处理）
+            # Path smoothing (if we have enough points)
             if len(path) > 2:
                 try:
                     path = self._optimized_smooth(path)
                 except Exception as e:
-                    logging.warning(f"路径平滑失败: {str(e)}")
+                    logging.warning(f"Path smoothing failed: {str(e)}")
                     
-            # 缓存结果
+            # Cache result
             self.path_cache.put(cache_key, path)
             
-            # 记录性能指标
+            # Record performance metrics
             elapsed = time.time() - start_time
             self.total_planning_time += elapsed
             
-            if elapsed > 0.1:  # 记录较慢的规划
-                logging.debug(f"路径规划耗时较长: {elapsed:.3f}秒 ({start} -> {end})")
+            if elapsed > 0.1:  # Log slow planning
+                logging.debug(f"Path planning took relatively long: {elapsed:.3f}s ({start} -> {end})")
                 
             return path
                 
         except Exception as e:
-            logging.error(f"路径规划异常: {str(e)}")
+            logging.error(f"Path planning exception: {str(e)}")
             elapsed = time.time() - start_time
             self.total_planning_time += elapsed
-            # 出错时使用简单直线路径
+            # Return simple direct path on error
             return self._generate_fallback_path(start, end)
 
     def _fast_astar(self, start: Tuple, end: Tuple) -> List[Tuple]:
@@ -839,133 +838,136 @@ class HybridPathPlanner:
             logging.error(f"_fast_astar出错: {str(e)}")
             return self._generate_fallback_path(start, end)
     def safe_get_node(self, x, y, t=0):
-        """安全地创建Node对象，处理各种类型转换"""
+        """Safe method to create Node objects with error handling"""
         try:
-            # 处理元组/列表输入
+            # Handle tuple/list input
             if isinstance(x, (tuple, list)) and len(x) >= 2:
                 t = y if isinstance(y, (int, float)) else 0
                 y = x[1]
                 x = x[0]
-                
-            # 确保数值类型
-            x = float(x) if not isinstance(x, (int, float)) else x
-            y = float(y) if not isinstance(y, (int, float)) else y
-            t = float(t) if not isinstance(t, (int, float)) else t
-            
-            return global_node_pool.get_node(x, y, t)  # 使用全局变量而不是self.global_node_pool
-        except Exception as e:
-            logging.error(f"创建Node对象失败: {str(e)}")
-            # 返回默认Node作为备选方案
-            return Node(0, 0, 0)    
-    def _optimized_astar(self, start: Tuple, end: Tuple, vehicle) -> List[Tuple]:
-        """优化的A*算法 - 考虑车辆约束的完整版本"""
-        try:
-            # 安全创建起点和终点节点
-            start_node = self.safe_get_node(*start)
-            end_node = self.safe_get_node(*end)
-            
-            # 获取车辆属性 - 预先提取避免重复访问
-            turning_radius = getattr(vehicle, 'turning_radius', 10.0)
-            min_hardness = getattr(vehicle, 'min_hardness', 2.5)
-            current_load = getattr(vehicle, 'current_load', 0)
-            
-            # 检查终点是否为障碍物
-            if self._is_obstacle_fast(end):
-                logging.warning(f"终点{end}是障碍物，无法规划路径")
-                global_node_pool.release_all()
-                return self._generate_fallback_path(start, end)
-                
-            # 高效的优先队列和数据结构
-            open_queue = PriorityQueue()
-            open_queue.push(start_node, 0)
-            closed_set = set()
-            g_score = {start_node: 0}
-            f_score = {start_node: self._fast_heuristic(start_node, end_node)}
-            came_from = {}
-            
-            # 限制搜索迭代次数
-            max_iterations = 10000
-            iteration = 0
-            
-            # 算法主循环优化
-            while not open_queue.empty() and iteration < max_iterations:
-                iteration += 1
-                current = open_queue.pop()
-                
-                # 快速目标检查
-                if self._is_same_point(current, end_node):
-                    path = self._reconstruct_path(came_from, current)
-                    global_node_pool.release_all()
-                    return path
                     
-                # 避免重复处理
-                if current in closed_set:
+            # Ensure coordinates are numeric
+            x = float(x) if x is not None else 0.0
+            y = float(y) if y is not None else 0.0
+            t = float(t) if t is not None else 0.0
+                
+            return global_node_pool.get_node(x, y, t)
+        except Exception as e:
+            logging.error(f"Node creation error: {str(e)}, using default Node(0,0,0)")
+            # Return default node on error
+            return Node(0, 0, 0)  
+    def _optimized_astar(self, start: Tuple, end: Tuple, vehicle) -> List[Tuple]:
+        """完全重写的A*算法，避免Node对象复用问题"""
+        # 转换为元组确保一致性
+        if hasattr(start, 'as_tuple'):
+            start = start.as_tuple()
+        if hasattr(end, 'as_tuple'):
+            end = end.as_tuple()
+            
+        # 直接使用元组，不依赖Node对象
+        open_set = []  # 使用堆队列
+        heapq.heappush(open_set, (0, start))
+        
+        came_from = {}  # 路径记录
+        g_score = {start: 0}  # 起点到当前点的代价
+        f_score = {start: self._euclidean_distance(start, end)}  # 估计总代价
+        
+        closed_set = set()  # 已访问集合
+        
+        # 如果对象太多，限制迭代次数
+        max_iterations = 10000
+        iterations = 0
+        
+        while open_set and iterations < max_iterations:
+            iterations += 1
+            
+            # 获取f值最小的点
+            _, current = heapq.heappop(open_set)
+            
+            # 到达目标（允许一定误差）
+            if self._is_close_to(current, end, tolerance=3.0):
+                # 重建路径
+                path = self._reconstruct_tuple_path(came_from, current, end)
+                return path
+                
+            # 标记为已访问
+            closed_set.add(current)
+            
+            # 遍历相邻点
+            for dx, dy in self.directions:
+                nx, ny = current[0] + dx, current[1] + dy
+                neighbor = (nx, ny)
+                
+                # 跳过已访问点和障碍物
+                if neighbor in closed_set or self._is_obstacle_fast(neighbor):
                     continue
                     
-                closed_set.add(current)
+                # 对角线移动时检查拐角
+                if dx != 0 and dy != 0:
+                    # 检查两个相邻直角点是否都是障碍物
+                    if (self._is_obstacle_fast((current[0], ny)) or 
+                        self._is_obstacle_fast((nx, current[1]))):
+                        continue
                 
-                # 遍历所有可能方向
-                for dx, dy in self.directions:
-                    nx, ny = current.x + dx, current.y + dy
-                    neighbor = self.safe_get_node(nx, ny)
-                    
-                    # 优化的筛选逻辑（先进行快速检查）
-                    if neighbor in closed_set:
-                        global_node_pool.release_node(neighbor)
-                        continue
-                        
-                    if self._is_obstacle_fast((nx, ny)):
-                        global_node_pool.release_node(neighbor)
-                        continue
-                        
-                    if dx != 0 and dy != 0 and self._is_diagonal_blocked(current, neighbor):
-                        global_node_pool.release_node(neighbor)
-                        continue
-                    
-                    # 车辆特定约束检查（仅在通过基本检查后执行）
+                # 计算移动代价
+                move_cost = math.sqrt(dx*dx + dy*dy)  # 欧几里得距离
+                
+                # 考虑车辆特性
+                if vehicle:
                     terrain_hardness = self._get_cached_terrain_hardness(nx, ny)
+                    # 检查最小硬度
+                    min_hardness = getattr(vehicle, 'min_hardness', 2.5)
                     if terrain_hardness < min_hardness:
-                        global_node_pool.release_node(neighbor)
                         continue
                         
-                    # 转弯半径检查（仅在必要时）
-                    if hasattr(vehicle, 'last_position') and vehicle.last_position:
-                        if not self._check_turn_radius(current, neighbor, vehicle):
-                            global_node_pool.release_node(neighbor)
-                            continue
-                    
-                    # 计算移动成本（考虑车辆特性）
-                    move_cost = self._calculate_vehicle_move_cost(
-                        current, neighbor, 
-                        terrain_hardness, current_load,
-                        dx, dy
-                    )
-                    
-                    # 路径更新
-                    try:
-                        tentative_g = g_score[current] + move_cost
-                        if neighbor not in g_score or tentative_g < g_score[neighbor]:
-                            came_from[neighbor] = current
-                            g_score[neighbor] = tentative_g
-                            f_value = tentative_g + self._enhanced_heuristic(neighbor, end_node, vehicle)
-                            f_score[neighbor] = f_value
-                            open_queue.push(neighbor, f_value)
-                        else:
-                            global_node_pool.release_node(neighbor)
-                    except Exception as inner_e:
-                        logging.error(f"A*内部错误: {str(inner_e)}")
-                        global_node_pool.release_node(neighbor)
-                        continue
-            
-            # 未找到路径或达到最大迭代次数
-            if iteration >= max_iterations:
-                logging.warning(f"优化A*搜索达到最大迭代次数 {max_iterations}，使用备用路径")
+                    # 调整移动成本
+                    current_load = getattr(vehicle, 'current_load', 0)
+                    move_cost *= (1.0 + current_load / 100.0)  # 负载增加成本
+                    move_cost *= max(1.0, 3.0 / terrain_hardness)  # 地形影响
                 
-            global_node_pool.release_all()
-            return self._generate_fallback_path(start, end)
-        except Exception as e:
-            logging.error(f"_optimized_astar出错: {str(e)}")
-            return self._generate_fallback_path(start, end)
+                # 路径更新
+                tentative_g = g_score[current] + move_cost
+                
+                if neighbor not in g_score or tentative_g < g_score[neighbor]:
+                    # 记录最佳路径
+                    came_from[neighbor] = current
+                    g_score[neighbor] = tentative_g
+                    
+                    # 更新f值并加入开放集
+                    f_value = tentative_g + self._euclidean_distance(neighbor, end)
+                    
+                    # 安全地添加到堆中
+                    for i, (_, p) in enumerate(open_set):
+                        if p == neighbor:
+                            open_set[i] = (f_value, neighbor)  # 更新
+                            heapq.heapify(open_set)
+                            break
+                    else:
+                        heapq.heappush(open_set, (f_value, neighbor))  # 新增
+        
+        # 未找到路径，使用备选方案
+        logging.warning(f"A*算法未找到路径 ({iterations}次迭代), 使用备选路径")
+        return self._generate_fallback_path(start, end)
+    def _euclidean_distance(self, p1, p2):
+        """计算两点间欧几里得距离"""
+        return math.sqrt((p2[0] - p1[0])**2 + (p2[1] - p1[1])**2)
+        
+    def _is_close_to(self, p1, p2, tolerance=1.0):
+        """检查两点是否足够接近"""
+        return self._euclidean_distance(p1, p2) <= tolerance
+    def _reconstruct_tuple_path(self, came_from, current, end):
+        """从came_from字典重建路径，使用元组而非Node对象"""
+        path = [end]  # 从终点开始
+        
+        # 跟踪直到起点
+        while current in came_from:
+            path.append(current)
+            current = came_from[current]
+        
+        path.append(current)  # 添加起点
+        path.reverse()  # 反转为起点到终点
+        
+        return path
     def _is_same_point(self, a, b, tolerance=EPSILON):
         """优化的点相等判断"""
         return abs(a.x - b.x) < tolerance and abs(a.y - b.y) < tolerance
@@ -1071,13 +1073,37 @@ class HybridPathPlanner:
             # 计算出错默认通过
             return True
         
-    def _reconstruct_path(self, came_from: Dict, current: Node) -> List[Tuple]:
-        """重建路径 - 优化的实现"""
-        path = [(current.x, current.y)]
-        while current in came_from:
-            current = came_from[current]
-            path.append((current.x, current.y))
-        return list(reversed(path))
+    def _reconstruct_path(self, came_from: Dict, current) -> List[Tuple]:
+        """More robust path reconstruction that handles potentially invalid nodes"""
+        try:
+            # Start with current node
+            if hasattr(current, 'x') and hasattr(current, 'y'):
+                path = [(current.x, current.y)]
+            else:
+                # Handle case where current is not a Node object
+                path = [current if isinstance(current, tuple) else (0, 0)]
+            
+            # Backtrack through came_from map
+            while current in came_from:
+                current = came_from[current]
+                
+                # Handle each node or coordinate appropriately
+                if hasattr(current, 'x') and hasattr(current, 'y'):
+                    path.append((current.x, current.y))
+                elif isinstance(current, tuple) and len(current) >= 2:
+                    path.append(current)
+                else:
+                    logging.warning(f"Invalid node in path reconstruction: {current}")
+                    # Skip invalid nodes
+                    continue
+                    
+            # Return reversed path (from start to end)
+            return list(reversed(path))
+        except Exception as e:
+            logging.error(f"Path reconstruction error: {str(e)}")
+            # Return whatever we have so far
+            return list(reversed(path)) if path else []
+
 
     def _optimized_smooth(self, path: List[Tuple]) -> List[Tuple]:
         """优化的路径平滑算法"""

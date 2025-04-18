@@ -40,12 +40,20 @@ def run_simulation(duration=120, update_interval=1.0, num_vehicles=5, num_tasks=
     
     # 创建测试场景的障碍物
     create_test_obstacles(path_planner)
-    
+    # 创建车辆
+    vehicles = create_vehicles(map_service, num_vehicles)    
     # 创建CBS冲突解决器
     cbs = ConflictBasedSearch(path_planner)
-    
-    # 创建车辆
-    vehicles = create_vehicles(map_service, num_vehicles)
+    class MockDispatch:
+        def __init__(self):
+            self.vehicles = {}
+
+    if not path_planner.dispatch:
+        mock_dispatch = MockDispatch()
+        for vehicle in vehicles:
+            mock_dispatch.vehicles[vehicle.vehicle_id] = vehicle
+        path_planner.dispatch = mock_dispatch    
+
     
     # 创建任务
     tasks = create_tasks(num_tasks)
@@ -253,10 +261,22 @@ def assign_new_tasks(vehicles, tasks, path_planner, cbs):
     # 获取空闲车辆
     idle_vehicles = [v for v in vehicles if not v.current_task]
     
-    # 获取未分配/未完成的任务
-    available_tasks = [t for t in tasks if not hasattr(t, 'assigned_to') or 
-                       not t.assigned_to or 
-                       (hasattr(t, 'is_completed') and not t.is_completed)]
+    available_tasks = []
+    for task in tasks:
+        # 确保任务未完成且未被分配或已经完成
+        if hasattr(task, 'is_completed') and not task.is_completed:
+            # 检查任务是否已被分配给正在执行的车辆
+            already_assigned = False
+            for v in vehicles:
+                if v.current_task and v.current_task.task_id == task.task_id:
+                    already_assigned = True
+                    break
+            
+            if not already_assigned:
+                available_tasks.append(task)
+        elif not hasattr(task, 'is_completed') or (not task.is_completed and not hasattr(task, 'assigned_to')):
+            available_tasks.append(task)
+    
     
     # 分配任务
     for vehicle in idle_vehicles:

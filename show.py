@@ -25,7 +25,7 @@ from models.vehicle import MiningVehicle, VehicleState, TransportStage
 from models.task import TransportTask
 from utils.geo_tools import GeoUtils
 from algorithm.map_service import MapService
-from algorithm.path_planner import HybridPathPlanner
+from algorithm.optimized_path_planner import HybridPathPlanner
 from algorithm.dispatch_service import DispatchSystem, ConflictBasedSearch, TransportScheduler
 
 # 配置日志
@@ -288,12 +288,7 @@ class MineSimulator:
             
     def start_visualization(self):
         """启动可视化"""
-        self.vis_thread = threading.Thread(target=self._visualization_loop)
-        self.vis_thread.daemon = True
-        self.vis_thread.start()
-        
-    def _visualization_loop(self):
-        """可视化线程"""
+        # 在主线程中初始化图形
         plt.ion()  # 开启交互模式
         
         self.fig, self.ax = plt.subplots(figsize=(12, 10))
@@ -349,22 +344,36 @@ class MineSimulator:
         # 添加图例
         self.ax.legend(loc='upper right')
             
+        # 启动更新线程（只负责准备数据，不直接操作图形）
+        self.vis_thread = threading.Thread(target=self._prepare_visualization_data)
+        self.vis_thread.daemon = True
+        self.vis_thread.start()
+
+    def _prepare_visualization_data(self):
+        """准备可视化数据（在线程中运行）"""
         try:
             last_update = time.time()
             while self.running:
                 current_time = time.time()
                 if current_time - last_update >= self.config.get('visualization_interval', 0.5):
-                    self._update_visualization()
+                    # 只收集数据，不直接更新图形
+                    self._collect_visualization_data()
                     last_update = current_time
                     
-                plt.pause(0.1)
+                time.sleep(0.1)
         except Exception as e:
-            logging.error(f"可视化异常: {str(e)}")
-        finally:
-            plt.ioff()
-            
+            logging.error(f"可视化数据准备异常: {str(e)}")
+
+    def _collect_visualization_data(self):
+        """收集可视化数据"""
+        # 设置一个标志，表示有新数据需要在主线程中更新
+        self.visualization_data_ready = True
+
     def _update_visualization(self):
-        """更新可视化"""
+        """更新可视化（在主线程中调用）"""
+        if not hasattr(self, 'visualization_data_ready') or not self.visualization_data_ready:
+            return
+            
         try:
             # 更新车辆位置
             for vid, vehicle in self.dispatch.vehicles.items():
@@ -418,6 +427,9 @@ class MineSimulator:
             self.fig.canvas.draw_idle()
             self.fig.canvas.flush_events()
             
+            # 重置标志
+            self.visualization_data_ready = False
+            
         except Exception as e:
             logging.error(f"更新可视化异常: {str(e)}")
 
@@ -436,42 +448,53 @@ def main():
         # 主线程等待，接收用户输入的命令
         while simulator.running:
             try:
-                cmd = input("\n输入命令(help查看帮助)> ").strip().lower()
+                # 更新可视化（在主线程中）
+                if hasattr(simulator, 'fig') and simulator.fig:
+                    simulator._update_visualization()
+                    plt.pause(0.01)  # 短暂暂停以允许GUI事件处理
                 
-                if cmd == 'quit' or cmd == 'exit':
-                    simulator.stop_simulation()
-                    break
-                elif cmd == 'help':
-                    print("\n可用命令:")
-                    print("  status  - 显示系统状态")
-                    print("  map     - 显示ASCII地图")
-                    print("  add     - 添加随机任务")
-                    print("  move id x y - 移动指定车辆到坐标")
-                    print("  quit    - 退出模拟")
-                elif cmd == 'status':
-                    simulator.dispatch.print_system_status()
-                elif cmd == 'map':
-                    simulator.dispatch.print_ascii_map()
-                elif cmd == 'add':
-                    simulator._generate_random_task()
-                    print("已添加随机任务")
-                elif cmd.startswith('move '):
-                    parts = cmd.split()
-                    if len(parts) == 4:
-                        try:
-                            vid = int(parts[1])
-                            x = float(parts[2])
-                            y = float(parts[3])
-                            simulator.dispatch.dispatch_vehicle_to(vid, (x, y))
-                            print(f"已调度车辆{vid}前往({x}, {y})")
-                        except ValueError:
-                            print("参数错误：请确保输入正确的车辆ID和坐标")
-                        except Exception as e:
-                            print(f"调度失败：{str(e)}")
+                # 非阻塞方式检查是否有输入
+                import msvcrt
+                if msvcrt.kbhit():
+                    cmd = input("\n输入命令(help查看帮助)> ").strip().lower()
+                    
+                    if cmd == 'quit' or cmd == 'exit':
+                        simulator.stop_simulation()
+                        break
+                    elif cmd == 'help':
+                        print("\n可用命令:")
+                        print("  status  - 显示系统状态")
+                        print("  map     - 显示ASCII地图")
+                        print("  add     - 添加随机任务")
+                        print("  move id x y - 移动指定车辆到坐标")
+                        print("  quit    - 退出模拟")
+                    elif cmd == 'status':
+                        simulator.dispatch.print_system_status()
+                    elif cmd == 'map':
+                        simulator.dispatch.print_ascii_map()
+                    elif cmd == 'add':
+                        simulator._generate_random_task()
+                        print("已添加随机任务")
+                    elif cmd.startswith('move '):
+                        parts = cmd.split()
+                        if len(parts) == 4:
+                            try:
+                                vid = int(parts[1])
+                                x = float(parts[2])
+                                y = float(parts[3])
+                                simulator.dispatch.dispatch_vehicle_to(vid, (x, y))
+                                print(f"已调度车辆{vid}前往({x}, {y})")
+                            except ValueError:
+                                print("参数错误：请确保输入正确的车辆ID和坐标")
+                            except Exception as e:
+                                print(f"调度失败：{str(e)}")
+                        else:
+                            print("格式错误：使用'move 车辆ID x坐标 y坐标'")
                     else:
-                        print("格式错误：使用'move 车辆ID x坐标 y坐标'")
-                else:
-                    print("未知命令，输入'help'查看帮助")
+                        print("未知命令，输入'help'查看帮助")
+                
+                # 短暂休眠，避免CPU占用过高
+                time.sleep(0.1)
                     
             except KeyboardInterrupt:
                 print("\n接收到中断信号，退出模拟...")
@@ -484,6 +507,8 @@ def main():
         traceback.print_exc()
     finally:
         simulator.stop_simulation()
+        if hasattr(simulator, 'fig') and simulator.fig:
+            plt.close(simulator.fig)
         print("\n模拟已停止")
 
 if __name__ == "__main__":

@@ -805,7 +805,7 @@ class HybridPathPlanner:
                             
                         # 最小转弯半径考虑
                         if hasattr(vehicle, 'turning_radius') and vehicle.turning_radius > 0:
-                            if hasattr(came_from, current) and current in came_from:
+                            if current in came_from:
                                 prev = came_from[current]
                                 # 检查转弯角度
                                 prev_dx, prev_dy = current[0] - prev[0], current[1] - prev[1]

@@ -253,7 +253,70 @@ class ConflictBasedSearch:
         except Exception as e:
             logging.error(f"计算车辆优先级出错: {str(e)}")
             return 5.0  # 出错时返回最低优先级
-    
+    def _replan_path(self, vehicle_id, conflict_location=None, conflict_time=None, max_retries=3):
+        """对指定车辆重新规划路径，避开冲突点"""
+        logging.debug(f"开始为车辆{vehicle_id}重新规划路径")
+        
+        try:
+            # 确保车辆ID是整数
+            if isinstance(vehicle_id, str) and vehicle_id.isdigit():
+                vehicle_id = int(vehicle_id)
+                
+            # 确保有vehicle对象
+            if not hasattr(self.planner, 'dispatch'):
+                logging.error("规划器未初始化dispatch属性")
+                return None
+                
+            if vehicle_id not in self.planner.dispatch.vehicles:
+                logging.error(f"找不到车辆ID: {vehicle_id}")
+                return None
+                
+            vehicle = self.planner.dispatch.vehicles[vehicle_id]
+            
+            # 确定起点和终点
+            start_point = vehicle.current_location
+            
+            # 确定目标位置
+            if vehicle.current_task and hasattr(vehicle.current_task, 'end_point'):
+                end_point = vehicle.current_task.end_point
+            elif hasattr(vehicle, 'current_path') and vehicle.current_path:
+                end_point = vehicle.current_path[-1]
+            else:
+                logging.warning(f"无法确定车辆{vehicle_id}的目标位置")
+                return None
+            
+            # 添加绕行点避开冲突
+            if conflict_location:
+                # 计算绕行点
+                import random
+                offset = 20 + random.random() * 10  # 20-30单位的偏移
+                
+                if abs(end_point[0] - start_point[0]) > abs(end_point[1] - start_point[1]):
+                    # 水平方向路径，垂直偏移
+                    detour_point = (
+                        conflict_location[0], 
+                        conflict_location[1] + offset * (1 if random.random() > 0.5 else -1)
+                    )
+                else:
+                    # 垂直方向路径，水平偏移
+                    detour_point = (
+                        conflict_location[0] + offset * (1 if random.random() > 0.5 else -1),
+                        conflict_location[1]
+                    )
+                
+                # 分段规划路径
+                path1 = self.planner.plan_path(start_point, detour_point, vehicle)
+                path2 = self.planner.plan_path(detour_point, end_point, vehicle)
+                
+                if path1 and path2:
+                    return path1[:-1] + path2  # 合并路径，去掉重复的连接点
+            
+            # 直接规划路径
+            return self.planner.plan_path(start_point, end_point, vehicle)
+            
+        except Exception as e:
+            logging.error(f"重规划路径发生异常: {str(e)}")
+            return None
     def resolve_conflicts(self, paths: Dict[str, List[Tuple]]) -> Dict[str, List[Tuple]]:
         """
         解决路径冲突

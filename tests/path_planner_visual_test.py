@@ -598,53 +598,208 @@ class PathPlannerVisualizer:
         return self.vehicle_markers + self.vehicle_labels + self.vehicle_path_lines
     
     def _update_vehicles(self):
-        """更新车辆位置和路径"""
-        # 处理活动车辆
-        to_remove = []
-        for vehicle in self.active_vehicles:
-            if vehicle in self.vehicle_path_progress:
-                # 获取当前进度和路径
-                progress = self.vehicle_path_progress[vehicle]
-                path = self.vehicle_paths.get(vehicle, [])
-                
-                if path and 0 <= progress < len(path):
-                    # 更新位置
-                    vehicle.current_location = path[progress]
-                    
-                    # 增加进度
-                    self.vehicle_path_progress[vehicle] += 1
-                    
-                    # 检查是否到达终点
-                    if progress >= len(path) - 1:
-                        to_remove.append(vehicle)
-                else:
-                    to_remove.append(vehicle)
-        
-        # 移除完成的车辆
-        for vehicle in to_remove:
-            if vehicle in self.active_vehicles:
+        """更新车辆位置"""
+        if not self.active_vehicles:
+            return
+            
+        for vehicle in list(self.active_vehicles):
+            path = self.vehicle_paths.get(vehicle, [])
+            
+            if not path or len(path) < 2:
                 self.active_vehicles.remove(vehicle)
-                # 记录完成
-                if hasattr(vehicle, 'current_task') and vehicle.current_task:
-                    vehicle.current_task.is_completed = True
-                    self.stats['path_lengths'].append(len(self.vehicle_paths.get(vehicle, [])))
+                continue
+                
+            # 获取当前路径进度
+            progress = self.vehicle_path_progress.get(vehicle, 0)
+            
+            # 检查是否到达终点
+            if progress >= len(path) - 1:
+                # 车辆到达终点
+                self.active_vehicles.remove(vehicle)
+                continue
+                
+            # 更新路径进度
+            progress += self.simulation_speed * 0.1  # 根据模拟速度调整步长
+            progress = min(progress, len(path) - 1)  # 确保不超过路径长度
+            self.vehicle_path_progress[vehicle] = progress
+            
+            # 计算当前位置
+            progress_int = int(progress)
+            progress_frac = progress - progress_int
+            
+            if progress_int < len(path) - 1:
+                current = path[progress_int]
+                next_point = path[progress_int + 1]
+                
+                # 检查当前路径段是否穿过障碍物
+                if self._is_path_segment_blocked(current, next_point):
+                    # 如果路径段穿过障碍物，尝试重新规划路径
+                    new_path = self._replan_path_for_vehicle(vehicle, vehicle.current_location, path[-1])
+                    if new_path and len(new_path) > 1:
+                        self.vehicle_paths[vehicle] = new_path
+                        self.vehicle_path_progress[vehicle] = 0
+                        continue
+                
+                # 插值计算当前位置
+                vehicle.current_location = (
+                    current[0] + (next_point[0] - current[0]) * progress_frac,
+                    current[1] + (next_point[1] - current[1]) * progress_frac
+                )
+            else:
+                # 到达终点
+                vehicle.current_location = path[-1]
         
-        # 更新可视化元素
-        for i, vehicle in enumerate(self.vehicles):
-            # 更新标记和标签
-            if i < len(self.vehicle_markers):
-                self.vehicle_markers[i].center = vehicle.current_location
+        # 检查是否所有车辆都完成测试
+        if not self.active_vehicles:
+            # 记录测试持续时间
+            test_duration = time.time() - self.test_stats.get('start_time', time.time())
+            self.test_stats['test_durations'].append(test_duration)
             
-            if i < len(self.vehicle_labels):
-                self.vehicle_labels[i].set_position((vehicle.current_location[0]+5, vehicle.current_location[1]+5))
+            # 移动到下一个测试
+            self.current_test_info['current_idx'] += 1
             
-            # 更新路径线
-            if i < len(self.vehicle_path_lines) and vehicle in self.active_vehicles and self.show_path:
-                path = self.vehicle_paths.get(vehicle, [])
-                if path:
-                    self.vehicle_path_lines[i].set_data([p[0] for p in path], [p[1] for p in path])
-            elif i < len(self.vehicle_path_lines):
-                self.vehicle_path_lines[i].set_data([], [])
+            # 更新热图
+            if self.show_heatmap:
+                self._update_heatmap_from_paths()
+
+    def _is_path_segment_blocked(self, start, end):
+        """检查路径段是否穿过障碍物"""
+        # 使用Bresenham算法获取路径段上的所有点
+        points = self._bresenham_line(start, end)
+        
+        # 检查这些点是否有障碍物
+        for point in points:
+            if self._is_obstacle(point):
+                return True
+        
+        return False
+
+    def _bresenham_line(self, start, end):
+        """Bresenham算法获取线段上的所有点"""
+        x1, y1 = int(round(start[0])), int(round(start[1]))
+        x2, y2 = int(round(end[0])), int(round(end[1]))
+        
+        points = []
+        dx = abs(x2 - x1)
+        dy = abs(y2 - y1)
+        sx = 1 if x1 < x2 else -1
+        sy = 1 if y1 < y2 else -1
+        err = dx - dy
+        
+        while True:
+            points.append((x1, y1))
+            if x1 == x2 and y1 == y2:
+                break
+            
+            e2 = 2 * err
+            if e2 > -dy:
+                err -= dy
+                x1 += sx
+            if e2 < dx:
+                err += dx
+                y1 += sy
+        
+        return points
+
+    def _is_obstacle(self, point):
+        """检查点是否为障碍物"""
+        # 转为整数坐标
+        x, y = int(round(point[0])), int(round(point[1]))
+        
+        return (x, y) in self.obstacles
+
+    def _replan_path_for_vehicle(self, vehicle, current_pos, destination):
+        """为车辆重新规划路径，避开障碍物"""
+        # 尝试使用规划器生成新路径
+        try:
+            new_path = self.planner.plan_path(current_pos, destination, vehicle)
+            if new_path and len(new_path) > 1:
+                return new_path
+        except Exception as e:
+            logging.warning(f"重规划路径失败: {str(e)}")
+        
+        # 如果规划失败，尝试更智能的备选路径
+        return self._smart_fallback_path(current_pos, destination)
+
+    def _smart_fallback_path(self, start, end):
+        """生成更智能的备选路径，确保不穿过障碍物"""
+        # 先尝试直接连接
+        if not self._is_path_segment_blocked(start, end):
+            return [start, end]
+        
+        # 如果直连被阻挡，尝试找中间点
+        # 1. 计算起点到终点的方向
+        dx = end[0] - start[0]
+        dy = end[1] - start[1]
+        dist = math.sqrt(dx*dx + dy*dy)
+        
+        # 2. 尝试不同方向的偏移点
+        for angle_offset in [0, 45, -45, 90, -90, 135, -135, 180]:
+            # 转换为弧度
+            angle = math.atan2(dy, dx) + math.radians(angle_offset)
+            # 计算偏移距离 (与原始距离相关)
+            offset_dist = dist * 0.5  # 使用原始距离的一半
+            
+            # 计算中间点
+            mid_x = start[0] + math.cos(angle) * offset_dist
+            mid_y = start[1] + math.sin(angle) * offset_dist
+            mid_point = (mid_x, mid_y)
+            
+            # 检查路径段是否可行
+            if (not self._is_path_segment_blocked(start, mid_point) and 
+                not self._is_path_segment_blocked(mid_point, end) and
+                not self._is_obstacle(mid_point)):
+                return [start, mid_point, end]
+        
+        # 如果所有常规方向都不行，尝试使用多个中间点
+        # 这里使用四个点，形成一个绕行路径
+        mid_points = []
+        angles = [45, 135, -135, -45]  # 大致形成一个矩形路径
+        
+        for angle_offset in angles:
+            angle = math.radians(angle_offset)
+            # 使用较大偏移确保绕开障碍物
+            offset_dist = dist * 0.7
+            
+            mid_x = start[0] + math.cos(angle) * offset_dist
+            mid_y = start[1] + math.sin(angle) * offset_dist
+            mid_point = (mid_x, mid_y)
+            
+            # 确保中间点不是障碍物
+            if not self._is_obstacle(mid_point):
+                mid_points.append(mid_point)
+        
+        if mid_points:
+            # 构建完整路径 [起点, 中间点1, 中间点2, ..., 终点]
+            path = [start] + mid_points + [end]
+            
+            # 检查新路径中每段是否有障碍物，移除导致障碍的点
+            valid_path = [start]
+            for i in range(1, len(path)):
+                if not self._is_path_segment_blocked(valid_path[-1], path[i]):
+                    valid_path.append(path[i])
+            
+            # 确保终点在路径中
+            if valid_path[-1] != end:
+                valid_path.append(end)
+            
+            return valid_path
+        
+        # 最后手段：随机尝试多个中间点
+        for _ in range(10):  # 尝试10次
+            # 随机偏移
+            mid_x = start[0] + random.uniform(-dist, dist)
+            mid_y = start[1] + random.uniform(-dist, dist)
+            mid_point = (mid_x, mid_y)
+            
+            if (not self._is_obstacle(mid_point) and
+                not self._is_path_segment_blocked(start, mid_point) and
+                not self._is_path_segment_blocked(mid_point, end)):
+                return [start, mid_point, end]
+        
+        # 实在找不到路径，返回直连路径，但记录警告
+        logging.warning(f"无法找到避开障碍物的路径: {start} -> {end}")
+        return [start, end]
     
     def _update_status_display(self):
         """更新状态显示"""

@@ -3067,3 +3067,103 @@
 2025-04-17 18:15:38,670 - dispatch_integration - WARNING - Monitor thread did not terminate within timeout
 2025-04-17 18:15:43,676 - dispatch_integration - WARNING - Performance thread did not terminate within timeout
 2025-04-17 18:15:43,677 - dispatch_integration - INFO - Dispatch service stopped
+2025-04-18 09:40:01,534 - root - INFO - 坐标工具初始化 | 网格尺寸:1000 原点:(0, 0)
+2025-04-18 09:40:01,678 - root - INFO - 矿山路网初始化成功: 50x50 网格
+2025-04-18 09:40:01,680 - dispatch_integration - INFO - Path planner patched with safe fallback
+2025-04-18 09:40:01,680 - root - INFO - 调度系统初始化完成
+2025-04-18 09:40:01,681 - dispatch_integration - INFO - Enhanced scheduling cycle applied with dynamic conflict resolution
+2025-04-18 09:40:01,681 - dispatch_integration - INFO - Integrated dispatch system initialized
+2025-04-18 09:40:01,682 - dispatch_integration - INFO - Integrated system configured with default settings
+2025-04-18 09:40:01,682 - dispatch_integration - INFO - Vehicle 1 registered with dispatch system
+2025-04-18 09:40:01,683 - dispatch_integration - INFO - Vehicle 2 registered with dispatch system
+2025-04-18 09:40:01,684 - dispatch_integration - INFO - Vehicle 3 registered with dispatch system
+2025-04-18 09:40:01,684 - root - INFO - 已接收任务 TASK-01 (unloading)
+2025-04-18 09:40:01,685 - dispatch_integration - INFO - Task TASK-01 added to dispatch queue
+2025-04-18 09:40:01,686 - root - INFO - 已接收任务 TASK-02 (loading)
+2025-04-18 09:40:01,686 - dispatch_integration - INFO - Task TASK-02 added to dispatch queue
+2025-04-18 09:40:01,687 - root - INFO - 已接收任务 TASK-03 (unloading)
+2025-04-18 09:40:01,687 - dispatch_integration - INFO - Task TASK-03 added to dispatch queue
+2025-04-18 09:40:01,688 - root - INFO - 开始调度周期
+2025-04-18 09:40:01,689 - dispatch_integration - ERROR - Error in monitoring: local variable 'new_completed' referenced before assignment
+2025-04-18 09:40:01,689 - dispatch_integration - INFO - Performance Report - Uptime: 0.00h | Tasks: 0/3 | Conflicts: 0 detected, 0 resolved | Deadlocks: 0 detected, 0 resolved | Path planning failures: 0
+2025-04-18 09:40:01,689 - dispatch_integration - INFO - Dispatch service started with 5s cycle
+2025-04-18 09:40:01,690 - root - INFO - 车辆 1 已接受任务 TASK-02
+2025-04-18 09:40:01,691 - dispatch_integration - INFO - Path Planning Metrics - Avg planning time: 0.00毫秒 | Cache hit rate: 0.00 | Obstacle count: 0
+2025-04-18 09:40:01,692 - root - INFO - 车辆 1 已分配任务 TASK-02
+2025-04-18 09:40:01,693 - root - ERROR - 创建Node对象失败: 'HybridPathPlanner' object has no attribute 'global_node_pool'
+2025-04-18 09:40:01,693 - root - ERROR - 创建Node对象失败: 'HybridPathPlanner' object has no attribute 'global_node_pool'
+2025-04-18 09:40:01,694 - root - WARNING - 路径规划失败，使用备用路径: (150, 130) -> (300.0, 60.0)
+2025-04-18 09:40:01,696 - root - INFO - 共发现0个冲突点
+2025-04-18 09:40:01,697 - root - INFO - 调度周期成功完成，耗时: 0.006秒
+2025-04-18 09:40:06,702 - root - INFO - 开始调度周期
+2025-04-18 09:40:06,703 - root - INFO - 车辆1完成任务TASK-02
+2025-04-18 09:40:06,706 - root - INFO - 调度周期成功完成，耗时: 0.004秒
+2025-04-18 09:40:11,720 - root - INFO - 开始调度周期
+2025-04-18 09:40:11,721 - root - INFO - 生成随机任务: LOADING-1744940411 (loading)
+2025-04-18 09:40:11,725 - root - INFO - 调度周期成功完成，耗时: 0.004秒
+2025-04-18 09:40:16,718 - root - INFO - 已接收任务 TASK-EXTRA (manual)
+2025-04-18 09:40:16,718 - dispatch_integration - INFO - Task TASK-EXTRA added to dispatch queue
+2025-04-18 09:40:16,734 - root - INFO - 开始调度周期
+2025-04-18 09:40:16,735 - root - INFO - 车辆 2 已接受任务 TASK-EXTRA
+2025-04-18 09:40:16,735 - root - INFO - 车辆 2 已分配任务 TASK-EXTRA
+2025-04-18 09:40:16,736 - root - INFO - 车辆 3 已接受任务 LOADING-1744940411
+2025-04-18 09:40:16,737 - root - INFO - 车辆 3 已分配任务 LOADING-1744940411
+2025-04-18 09:40:16,738 - root - ERROR - 创建Node对象失败: 'HybridPathPlanner' object has no attribute 'global_node_pool'
+2025-04-18 09:40:16,738 - root - ERROR - 创建Node对象失败: 'HybridPathPlanner' object has no attribute 'global_node_pool'
+2025-04-18 09:40:16,739 - root - WARNING - 路径规划失败，使用备用路径: (200, 160) -> (250.0, 250.0)
+2025-04-18 09:40:16,740 - root - ERROR - 创建Node对象失败: 'HybridPathPlanner' object has no attribute 'global_node_pool'
+2025-04-18 09:40:16,741 - root - ERROR - 创建Node对象失败: 'HybridPathPlanner' object has no attribute 'global_node_pool'
+2025-04-18 09:40:16,741 - root - WARNING - 路径规划失败，使用备用路径: (250, 190) -> (0.0, -100.0)
+2025-04-18 09:40:16,742 - root - INFO - 共发现0个冲突点
+2025-04-18 09:40:16,746 - root - INFO - 调度周期成功完成，耗时: 0.012秒
+2025-04-18 09:40:21,757 - root - INFO - 开始调度周期
+2025-04-18 09:40:21,758 - root - INFO - 车辆2完成任务TASK-EXTRA
+2025-04-18 09:40:21,759 - root - INFO - 车辆3完成任务LOADING-1744940411
+2025-04-18 09:40:21,760 - root - ERROR - 调度周期执行异常: 车辆 3 当前状态(VehicleState.UNLOADING)无法接受新任务
+2025-04-18 09:40:31,783 - dispatch_integration - WARNING - Monitor thread did not terminate within timeout
+2025-04-18 09:40:36,788 - dispatch_integration - WARNING - Performance thread did not terminate within timeout
+2025-04-18 09:40:36,788 - dispatch_integration - INFO - Dispatch service stopped
+2025-04-18 09:49:52,483 - root - INFO - 初始化露天矿调度系统
+2025-04-18 09:49:52,484 - root - INFO - 坐标工具初始化 | 网格尺寸:200 原点:(0, 0)
+2025-04-18 09:49:52,639 - root - INFO - 矿山路网初始化成功: 50x50 网格
+2025-04-18 09:49:52,642 - root - WARNING - 加载配置失败: name 'configparser' is not defined，使用默认配置
+2025-04-18 09:49:52,643 - root - INFO - 调度系统初始化完成
+2025-04-18 09:49:52,643 - root - INFO - 调度系统初始化完成
+2025-04-18 09:49:52,700 - root - WARNING - 加载配置失败: name 'configparser' is not defined，使用默认配置
+2025-04-18 09:49:52,701 - root - INFO - 已初始化5辆车辆
+2025-04-18 09:49:52,702 - root - WARNING - 加载配置失败: name 'configparser' is not defined，使用默认配置
+2025-04-18 09:49:52,703 - root - INFO - 已接收任务 INITIAL-1 (loading)
+2025-04-18 09:49:52,704 - root - INFO - 已接收任务 INITIAL-2 (loading)
+2025-04-18 09:49:52,705 - root - INFO - 已接收任务 INITIAL-3 (loading)
+2025-04-18 09:49:52,706 - root - INFO - 已接收任务 INITIAL-4 (loading)
+2025-04-18 09:49:52,707 - root - INFO - 已接收任务 INITIAL-5 (loading)
+2025-04-18 09:49:52,707 - root - INFO - 已生成5个初始任务
+2025-04-18 09:49:52,708 - root - INFO - 模拟环境初始化完成
+2025-04-18 09:49:52,710 - root - INFO - 开始调度周期
+2025-04-18 09:49:52,710 - root - INFO - 可视化线程已启动
+2025-04-18 09:49:52,711 - root - WARNING - 加载配置失败: name 'configparser' is not defined，使用默认配置
+2025-04-18 09:49:52,711 - root - INFO - 调度系统已启动
+2025-04-18 09:49:52,713 - root - WARNING - 加载配置失败: name 'configparser' is not defined，使用默认配置
+2025-04-18 09:49:52,714 - root - WARNING - 加载配置失败: name 'configparser' is not defined，使用默认配置
+2025-04-18 09:49:52,715 - root - WARNING - 加载配置失败: name 'configparser' is not defined，使用默认配置
+2025-04-18 09:49:52,717 - root - WARNING - 加载配置失败: name 'configparser' is not defined，使用默认配置
+2025-04-18 09:49:52,718 - root - INFO - 车辆 3 已接受任务 INITIAL-2
+2025-04-18 09:49:52,719 - root - INFO - 车辆 3 已分配任务 INITIAL-2
+2025-04-18 09:49:52,720 - root - INFO - 车辆 5 已接受任务 INITIAL-4
+2025-04-18 09:49:52,721 - root - INFO - 车辆 5 已分配任务 INITIAL-4
+2025-04-18 09:49:52,722 - root - INFO - 车辆 4 已接受任务 INITIAL-1
+2025-04-18 09:49:52,722 - root - INFO - 车辆 4 已分配任务 INITIAL-1
+2025-04-18 09:49:52,723 - root - INFO - 车辆 1 已接受任务 INITIAL-5
+2025-04-18 09:49:52,724 - root - INFO - 车辆 1 已分配任务 INITIAL-5
+2025-04-18 09:49:52,725 - root - INFO - 车辆 2 已接受任务 INITIAL-3
+2025-04-18 09:49:52,726 - root - INFO - 车辆 2 已分配任务 INITIAL-3
+2025-04-18 09:49:52,728 - root - WARNING - 加载配置失败: name 'configparser' is not defined，使用默认配置
+2025-04-18 09:49:52,729 - root - INFO - 生成随机任务: LOADING-1744940992 (loading)
+2025-04-18 09:49:52,730 - root - ERROR - 创建Node对象失败: 'HybridPathPlanner' object has no attribute 'global_node_pool'
+2025-04-18 09:49:52,731 - root - ERROR - 创建Node对象失败: 'HybridPathPlanner' object has no attribute 'global_node_pool'
+2025-04-18 09:49:52,732 - root - INFO - 使用备用路径生成方法: (202.78853596915766, 190.50021510445333) -> (0.0, -100.0)
+2025-04-18 09:49:58,603 - root - WARNING - 加载配置失败: name 'configparser' is not defined，使用默认配置
+2025-04-18 09:50:10,881 - root - WARNING - 加载配置失败: name 'configparser' is not defined，使用默认配置
+2025-04-18 09:50:11,100 - root - ERROR - 可视化异常: set_wakeup_fd only works in main thread of the main interpreter
+2025-04-18 09:51:03,060 - root - ERROR - 系统运行异常: 
+2025-04-18 09:51:03,223 - root - INFO - 调度系统已停止

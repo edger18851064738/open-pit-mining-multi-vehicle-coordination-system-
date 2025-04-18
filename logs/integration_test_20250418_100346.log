@@ -1,0 +1,11 @@
+2025-04-18 10:03:46,588 - integration_test - INFO - 开始初始化系统组件
+2025-04-18 10:03:46,818 - integration_test - INFO - 路径规划器增强完成，添加了错误恢复机制
+2025-04-18 10:03:46,819 - integration_test - INFO - 调度系统增强完成，添加了性能监控和自动恢复机制
+2025-04-18 10:03:46,857 - integration_test - INFO - 已创建5200个障碍物点
+2025-04-18 10:03:46,859 - integration_test - INFO - 系统组件初始化完成
+2025-04-18 10:03:46,859 - integration_test - INFO - 集成测试框架初始化完成
+2025-04-18 10:03:46,860 - integration_test - INFO - 开始运行 'normal' 测试场景
+2025-04-18 10:03:46,862 - integration_test - INFO - 已创建5辆测试车辆
+2025-04-18 10:03:46,865 - integration_test - INFO - 已创建5个初始任务
+2025-04-18 10:03:46,869 - integration_test - INFO - 调度系统已启动，调度间隔: 2.0秒
+2025-04-18 10:03:46,869 - integration_test - ERROR - 测试运行发生错误: 'TestFramework' object has no attribute '_update_stats_loop'

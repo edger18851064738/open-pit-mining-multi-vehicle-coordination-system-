@@ -1,0 +1,13 @@
+2025-04-18 10:13:32,806 - integration_test - INFO - 开始初始化系统组件
+2025-04-18 10:13:33,055 - integration_test - INFO - 路径规划器增强完成，添加了错误恢复机制
+2025-04-18 10:13:33,055 - integration_test - INFO - 调度系统增强完成，添加了性能监控和自动恢复机制
+2025-04-18 10:13:33,096 - integration_test - INFO - 已创建5200个障碍物点
+2025-04-18 10:13:33,097 - integration_test - INFO - 系统组件初始化完成
+2025-04-18 10:13:33,098 - integration_test - INFO - 集成测试框架初始化完成
+2025-04-18 10:13:33,099 - integration_test - INFO - 开始运行 'normal' 测试场景
+2025-04-18 10:13:33,102 - integration_test - INFO - 已创建5辆测试车辆
+2025-04-18 10:13:33,108 - integration_test - INFO - 已创建5个初始任务
+2025-04-18 10:13:33,111 - integration_test - INFO - 调度系统已启动，调度间隔: 2.0秒
+2025-04-18 10:13:38,133 - integration_test - INFO - 测试进度: 00:05 | 任务: 0/5 完成 | 冲突: 0/0 已解决 | 规划失败: 0 | 车辆利用率: 100.0%
+2025-04-18 10:13:38,165 - integration_test - INFO - 车辆状态: PREPARING: 1, EN_ROUTE: 4
+2025-04-18 10:13:38,195 - integration_test - INFO - 装载点使用: 1, 卸载点使用: 0

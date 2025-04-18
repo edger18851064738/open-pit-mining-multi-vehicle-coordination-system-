@@ -263,7 +263,7 @@ class PathCache:
                 'hits': self.hits,
                 'misses': self.misses
             }
-
+  
 class HybridPathPlanner:
     """高性能矿山场景路径规划器"""
     
@@ -333,7 +333,7 @@ class HybridPathPlanner:
                     self.min_turn_radius = config.getfloat('MAP', 'min_turn_radius', fallback=15.0)
         except Exception as e:
             logging.warning(f"配置文件加载失败: {str(e)}")
-            
+      
     def plan_with_timeout(self, start_point, end_point, vehicle=None, timeout=5.0):
         """带超时的路径规划函数，使用安全的A*算法"""
         # 使用队列安全地传递结果
@@ -739,8 +739,8 @@ class HybridPathPlanner:
         """优化的A*算法 - 不考虑车辆约束时的快速版本"""
         try:
             # 安全创建起点和终点节点
-            start_node = self._safe_get_node(*start)
-            end_node = self._safe_get_node(*end)
+            start_node = self.safe_get_node(*start)
+            end_node = self.safe_get_node(*end)
             
             # 检查终点是否为障碍物
             if self._is_obstacle_fast(end):
@@ -787,7 +787,7 @@ class HybridPathPlanner:
                 for dx, dy in self.directions:
                     # 快速创建邻居节点
                     nx, ny = current.x + dx, current.y + dy
-                    neighbor = safe_get_node(nx, ny)
+                    neighbor = self.safe_get_node(nx, ny)
                     
                     # 优化的跳过逻辑
                     if neighbor in closed_set:
@@ -838,7 +838,7 @@ class HybridPathPlanner:
         except Exception as e:
             logging.error(f"_fast_astar出错: {str(e)}")
             return self._generate_fallback_path(start, end)
-    def _safe_get_node(self, x, y, t=0):
+    def safe_get_node(self, x, y, t=0):
         """安全地创建Node对象，处理各种类型转换"""
         try:
             # 处理元组/列表输入
@@ -852,17 +852,17 @@ class HybridPathPlanner:
             y = float(y) if not isinstance(y, (int, float)) else y
             t = float(t) if not isinstance(t, (int, float)) else t
             
-            return self.global_node_pool.get_node(x, y, t)
+            return global_node_pool.get_node(x, y, t)  # 使用全局变量而不是self.global_node_pool
         except Exception as e:
             logging.error(f"创建Node对象失败: {str(e)}")
             # 返回默认Node作为备选方案
-            return Node(0, 0, 0)                    
+            return Node(0, 0, 0)    
     def _optimized_astar(self, start: Tuple, end: Tuple, vehicle) -> List[Tuple]:
         """优化的A*算法 - 考虑车辆约束的完整版本"""
         try:
             # 安全创建起点和终点节点
-            start_node = self._safe_get_node(*start)
-            end_node = self._safe_get_node(*end)
+            start_node = self.safe_get_node(*start)
+            end_node = self.safe_get_node(*end)
             
             # 获取车辆属性 - 预先提取避免重复访问
             turning_radius = getattr(vehicle, 'turning_radius', 10.0)
@@ -907,7 +907,7 @@ class HybridPathPlanner:
                 # 遍历所有可能方向
                 for dx, dy in self.directions:
                     nx, ny = current.x + dx, current.y + dy
-                    neighbor = safe_get_node(nx, ny)
+                    neighbor = self.safe_get_node(nx, ny)
                     
                     # 优化的筛选逻辑（先进行快速检查）
                     if neighbor in closed_set:

@@ -335,38 +335,47 @@ class HybridPathPlanner:
         return points
     
     def _smooth_path(self, path):
-        """
-        平滑路径，移除冗余点
-        
-        Args:
-            path: 原始路径点列表
-            
-        Returns:
-            List[Tuple]: 平滑后的路径
-        """
+        """平滑路径并确保不穿过障碍物（改进版）"""
         if len(path) <= 2:
             return path
-            
+        
         # 使用道格拉斯-普克算法进行平滑
         result = self._douglas_peucker(path, 2.0)
         
-        # 如果需要，进一步减少点数
-        if len(result) > 20:
-            # 基于距离的采样
-            smoothed = [result[0]]  # 保留起点
-            distance_threshold = 10.0
-            last_point = result[0]
+        # 检查平滑后路径的每个相邻点之间是否穿过障碍物
+        safe_path = [result[0]]  # 添加起点
+        
+        for i in range(1, len(result)):
+            prev = safe_path[-1]
+            curr = result[i]
             
-            for i in range(1, len(result) - 1):
-                curr_dist = math.dist(last_point, result[i])
-                if curr_dist >= distance_threshold:
-                    smoothed.append(result[i])
-                    last_point = result[i]
-                    
-            smoothed.append(result[-1])  # 保留终点
-            return smoothed
+            # 检查连线是否穿过障碍物
+            line_points = self._bresenham_line(prev, curr)
+            has_obstacle = False
             
-        return result
+            for p in line_points:
+                if self._is_obstacle(p):
+                    has_obstacle = True
+                    break
+            
+            if has_obstacle:
+                # 如果连线穿过障碍物，找出原始路径中的中间点添加到安全路径中
+                orig_idx_prev = path.index(prev)
+                orig_idx_curr = path.index(curr) if curr in path else len(path) - 1
+                
+                # 添加原始路径中的点来避开障碍物
+                for j in range(orig_idx_prev + 1, orig_idx_curr + 1):
+                    if j < len(path):
+                        safe_path.append(path[j])
+            else:
+                # 如果连线没有穿过障碍物，直接添加当前点
+                safe_path.append(curr)
+        
+        # 确保终点添加到路径中
+        if safe_path[-1] != path[-1]:
+            safe_path.append(path[-1])
+        
+        return safe_path
     
     def _douglas_peucker(self, points, epsilon):
         """
@@ -927,22 +936,28 @@ class HybridPathPlanner:
         return path
     
     def _is_obstacle(self, point):
-        """检查点是否为障碍物"""
+        """检查点是否为障碍物（改进版）"""
+        # 转换为整数坐标（因为障碍物通常以整数坐标存储）
+        x, y = int(round(point[0])), int(round(point[1]))
+        int_point = (x, y)
+        
         # 基本检查
-        if point in self.obstacle_grids:
+        if int_point in self.obstacle_grids:
             return True
-            
-        # 使用空间索引进行更精确检查（如果可用）
+        
+        # 使用空间索引进行检查
         if hasattr(self, 'obstacle_index') and self.obstacle_index.grid:
-            return point in self.obstacle_index.query_point(point)
-            
-        # 使用地图服务进行检查（如果可用）
+            nearby_points = self.obstacle_index.query_point(int_point, radius=1)  # 检查周围1个单位的点
+            if nearby_points:
+                return True
+        
+        # 使用地图服务进行检查
         try:
-            if hasattr(self.map_service, 'is_obstacle'):
+            if hasattr(self.map_service, 'is_obstacle') and callable(getattr(self.map_service, 'is_obstacle')):
                 return self.map_service.is_obstacle(point)
-        except:
-            pass
-            
+        except Exception as e:
+            logging.debug(f"地图服务障碍物检查出错: {str(e)}")
+        
         return False
     
     def _generate_fallback_path(self, start, end):

@@ -355,5 +355,27 @@ class MapService:
                 return False
                 
         return True
-
+    def is_obstacle(self, point):
+        """检查指定点是否是障碍物"""
+        try:
+            # 转换为整数坐标
+            x, y = int(round(point[0])), int(round(point[1]))
+            point_key = (x, y)
+            
+            # 检查障碍物集合
+            if hasattr(self, 'obstacle_grids') and point_key in self.obstacle_grids:
+                return True
+            
+            # 如果有路网，检查节点可通行性
+            if hasattr(self, 'road_network'):
+                try:
+                    node = self.coord_to_node(point)
+                    return not self.road_network.nodes[node]['passable']
+                except:
+                    pass
+            
+            return False
+        except Exception as e:
+            logging.debug(f"障碍物检查出错: {str(e)}")
+            return False
 

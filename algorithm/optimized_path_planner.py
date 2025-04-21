@@ -947,16 +947,7 @@ class HybridPathPlanner:
     
     def _generate_fallback_path(self, start, end):
         """
-        生成备选路径
-        
-        当A*算法失败时提供替代路径方案，确保始终能返回可用的路径
-        
-        Args:
-            start: 起点坐标
-            end: 终点坐标
-            
-        Returns:
-            List[Tuple]: 备选路径
+        生成备选路径，确保避开障碍物
         """
         try:
             # 标准化坐标
@@ -968,11 +959,10 @@ class HybridPathPlanner:
             dy = end[1] - start[1]
             distance = math.sqrt(dx*dx + dy*dy)
             
-            # 检查障碍物
+            # 检查直线路径上的障碍物
+            line_points = self._bresenham_line(start, end)
             has_obstacles = False
             
-            # 先检查直线路径上的障碍物
-            line_points = self._bresenham_line(start, end)
             for point in line_points:
                 if self._is_obstacle(point):
                     has_obstacles = True
@@ -982,57 +972,108 @@ class HybridPathPlanner:
             if not has_obstacles:
                 return [start, end]
             
-            # 有障碍物，生成绕行路径
+            # 有障碍物，尝试更复杂的绕行路径
+            
+            # 尝试找到多个中间点绕行
             path = [start]
             
-            # 基于路径方向选择绕行策略
-            if abs(dx) > abs(dy):
-                # 水平路径较长，使用垂直绕行
-                offset = max(30, abs(dx) * 0.2)  # 至少30单位
+            # 尝试几种不同的绕行方案
+            detour_attempts = [
+                # 尝试上方绕行
+                (start[0] + dx/3, start[1] + abs(dx)/2),
+                (start[0] + 2*dx/3, start[1] + abs(dx)/2),
                 
-                # 生成两个中间点实现平滑导航
-                mid1 = (start[0] + dx * 0.3, start[1] + offset)
-                mid2 = (start[0] + dx * 0.7, start[1] + offset)
+                # 尝试下方绕行
+                (start[0] + dx/3, start[1] - abs(dx)/2),
+                (start[0] + 2*dx/3, start[1] - abs(dx)/2),
                 
-                # 检查中间点是否为障碍物
-                if self._is_obstacle(mid1) or self._is_obstacle(mid2):
-                    # 尝试反方向
-                    mid1 = (start[0] + dx * 0.3, start[1] - offset)
-                    mid2 = (start[0] + dx * 0.7, start[1] - offset)
-            else:
-                # 垂直路径较长，使用水平绕行
-                offset = max(30, abs(dy) * 0.2)  # 至少30单位
+                # 尝试左侧绕行
+                (start[0] - abs(dy)/2, start[1] + dy/3),
+                (start[0] - abs(dy)/2, start[1] + 2*dy/3),
                 
-                # 生成两个中间点实现平滑导航
-                mid1 = (start[0] + offset, start[1] + dy * 0.3)
-                mid2 = (start[0] + offset, start[1] + dy * 0.7)
-                
-                # 检查中间点是否为障碍物
-                if self._is_obstacle(mid1) or self._is_obstacle(mid2):
-                    # 尝试反方向
-                    mid1 = (start[0] - offset, start[1] + dy * 0.3)
-                    mid2 = (start[0] - offset, start[1] + dy * 0.7)
+                # 尝试右侧绕行
+                (start[0] + abs(dy)/2, start[1] + dy/3),
+                (start[0] + abs(dy)/2, start[1] + 2*dy/3),
+            ]
             
-            # 最终检查中间点
-            if self._is_obstacle(mid1) or self._is_obstacle(mid2):
-                # 两个方向都有障碍物，使用单个随机中间点
-                larger_offset = max(50, max(abs(dx), abs(dy)) * 0.4)
-                mid_point = (
-                    (start[0] + end[0]) / 2 + random.uniform(-larger_offset, larger_offset),
-                    (start[1] + end[1]) / 2 + random.uniform(-larger_offset, larger_offset)
-                )
-                path.append(mid_point)
-            else:
-                # 使用两个中间点
-                path.extend([mid1, mid2])
+            # 尝试各种绕行路径
+            for i in range(0, len(detour_attempts), 2):
+                mid1 = detour_attempts[i]
+                mid2 = detour_attempts[i+1]
+                
+                # 验证中间点不在障碍物上
+                if not self._is_obstacle(mid1) and not self._is_obstacle(mid2):
+                    # 验证连接线不穿过障碍物
+                    line1 = self._bresenham_line(start, mid1)
+                    line2 = self._bresenham_line(mid1, mid2)
+                    line3 = self._bresenham_line(mid2, end)
+                    
+                    if (not any(self._is_obstacle(p) for p in line1) and
+                        not any(self._is_obstacle(p) for p in line2) and
+                        not any(self._is_obstacle(p) for p in line3)):
+                        # 找到有效路径
+                        return [start, mid1, mid2, end]
             
-            # 始终包含终点
-            path.append(end)
-            return path
+            # 所有尝试都失败，使用网格搜索寻找简单路径
+            # 这是最后的备选方案，不会太高效但确保能找到路径
+            grid_size = 20
+            best_path = None
+            min_length = float('inf')
+            
+            # 生成一组网格点
+            for dx in range(-5, 6, 2):
+                for dy in range(-5, 6, 2):
+                    # 在起点和终点间寻找一个中点
+                    mid_point = (
+                        (start[0] + end[0]) / 2 + dx * grid_size,
+                        (start[1] + end[1]) / 2 + dy * grid_size
+                    )
+                    
+                    # 检查中点是否在障碍物上
+                    if self._is_obstacle(mid_point):
+                        continue
+                        
+                    # 检查从起点到中点的路径
+                    line1 = self._bresenham_line(start, mid_point)
+                    if any(self._is_obstacle(p) for p in line1):
+                        continue
+                        
+                    # 检查从中点到终点的路径
+                    line2 = self._bresenham_line(mid_point, end)
+                    if any(self._is_obstacle(p) for p in line2):
+                        continue
+                    
+                    # 找到一条可行路径
+                    path_length = len(line1) + len(line2)
+                    if path_length < min_length:
+                        min_length = path_length
+                        best_path = [start, mid_point, end]
+            
+            # 如果找到了可行路径，返回
+            if best_path:
+                return best_path
+                
+            # 最终方案：大范围绕行
+            perimeter_size = max(abs(dx), abs(dy)) * 2
+            corners = [
+                (start[0] - perimeter_size, start[1] - perimeter_size),
+                (start[0] - perimeter_size, end[1] + perimeter_size),
+                (end[0] + perimeter_size, end[1] + perimeter_size),
+                (end[0] + perimeter_size, start[1] - perimeter_size)
+            ]
+            
+            # 找到至少两个不在障碍物上的角点
+            valid_corners = [c for c in corners if not self._is_obstacle(c)]
+            
+            if len(valid_corners) >= 2:
+                # 选择第一个和最后一个有效角点
+                return [start, valid_corners[0], valid_corners[-1], end]
+                
+            # 所有尝试都失败，只能返回直线路径
+            logging.warning(f"无法找到避开障碍物的路径 {start} -> {end}，返回直线路径")
+            return [start, end]
+            
         except Exception as e:
-            logging.error(f"路径规划异常: {str(e)}")
-            elapsed = time.time() - start_time
-            self.total_planning_time += elapsed
-            self.failure_count += 1
-            # 错误时返回简单直线路径
-            return self._generate_fallback_path(start, end)
+            logging.error(f"备选路径生成失败: {str(e)}")
+            # 最简单的后备方案 - 直接连接起点和终点
+            return [start, end]

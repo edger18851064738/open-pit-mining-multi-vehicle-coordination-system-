@@ -554,15 +554,33 @@ class PathPlannerTester(QMainWindow):
             logging.error(f"更新显示时出错: {str(e)}")
 
     def _update_path_display(self, paths):
-        """更新路径显示"""
-        # 清除旧的路径线
-        for item in self.main_view.items():
-            if isinstance(item, pg.PlotDataItem) and item not in getattr(self, 'vehicle_markers', []):
-                self.main_view.removeItem(item)
+        """更新路径显示，保留之前的路径并使用渐变透明度"""
+        # 初始化路径存储
+        if not hasattr(self, 'displayed_paths'):
+            self.displayed_paths = {}
+            self.path_items = []  # 存储所有路径项以便控制透明度
         
-        # 如果不显示路径，直接返回
+        # 如果不显示路径，隐藏所有路径
         if not self.show_paths:
+            for item in self.path_items:
+                item.setOpacity(0)
             return
+        else:
+            # 恢复显示所有路径
+            for item in self.path_items:
+                item.setOpacity(1)
+        
+        # 降低之前路径的透明度
+        for i, item in enumerate(self.path_items):
+            # 使旧路径逐渐变淡，但保持可见
+            opacity = max(0.2, 1.0 - (len(self.path_items) - i) * 0.1)
+            try:
+                pen = item.opts['pen']
+                pen.setWidth(max(1, pen.width() - 0.2))  # 逐渐减小线宽
+                item.setPen(pen)
+                item.setOpacity(opacity)
+            except:
+                pass
         
         # 绘制新的路径
         for vehicle_id, path in paths.items():
@@ -573,18 +591,33 @@ class PathPlannerTester(QMainWindow):
             vehicle = next((v for v in self.vehicles if v.vehicle_id == vehicle_id), None)
             if not vehicle:
                 continue
-                
+            
+            # 检查此路径是否与上一个相同
+            path_key = str(path)
+            if vehicle_id in self.displayed_paths and self.displayed_paths[vehicle_id] == path_key:
+                continue  # 如果路径相同，跳过
+            
             # 创建路径线
             x_data = [p[0] for p in path]
             y_data = [p[1] for p in path]
             
+            # 使用更明显的样式表示新路径
             path_line = pg.PlotDataItem(
                 x_data, y_data,
-                pen=pg.mkPen(color=vehicle.color, width=2, style=Qt.DashLine),
-                name=f"车辆{vehicle_id}路径"
+                pen=pg.mkPen(color=vehicle.color, width=3, style=Qt.SolidLine),
+                name=f"车辆{vehicle_id}-路径{len(self.path_items)}"
             )
             
             self.main_view.addItem(path_line)
+            self.path_items.append(path_line)  # 添加到路径项列表
+            self.displayed_paths[vehicle_id] = path_key  # 记录显示的路径
+            
+            # 如果路径项过多，限制数量以避免性能问题
+            max_paths = 50
+            if len(self.path_items) > max_paths:
+                # 移除最旧的路径
+                old_item = self.path_items.pop(0)
+                self.main_view.removeItem(old_item)
 
     def _update_stats_display(self, stats):
         """更新统计信息显示"""
@@ -964,8 +997,9 @@ class PathPlannerTester(QMainWindow):
         # 获取所有点名称
         point_names = list(self.test_points.keys())
         
-        # 生成测试对 (确保每个点都被用作起点和终点)
-        for i in range(min(self.num_test_pairs, len(point_names))):
+        # 跳过第一个测试案例 (中心点到外面的路径)
+        # 生成测试对，从索引1开始而不是0
+        for i in range(1, min(self.num_test_pairs + 1, len(point_names))):
             start_idx = i % len(point_names)
             end_idx = (i + len(point_names) // 2) % len(point_names)  # 确保起点和终点不同
             
@@ -975,6 +1009,10 @@ class PathPlannerTester(QMainWindow):
             start_name = point_names[start_idx]
             end_name = point_names[end_idx]
             
+            # 跳过使用"中心点"的测试对
+            if "中心点" in (start_name, end_name):
+                continue
+                
             start_point = self.test_points[start_name]
             end_point = self.test_points[end_name]
             
@@ -984,8 +1022,8 @@ class PathPlannerTester(QMainWindow):
                 'start_name': start_name,
                 'end_name': end_name
             })
-            
-        # 如果需要更多测试对，添加随机组合
+        
+        # 如果需要更多测试对，添加随机组合，但避开中心点
         while len(test_pairs) < self.num_test_pairs:
             # 随机选择起点和终点
             start_idx = random.randint(0, len(point_names) - 1)
@@ -997,6 +1035,10 @@ class PathPlannerTester(QMainWindow):
                 
             start_name = point_names[start_idx]
             end_name = point_names[end_idx]
+            
+            # 跳过使用"中心点"的测试对
+            if "中心点" in (start_name, end_name):
+                continue
             
             start_point = self.test_points[start_name]
             end_point = self.test_points[end_name]

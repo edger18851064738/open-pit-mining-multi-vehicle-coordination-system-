@@ -29,7 +29,7 @@ from typing import List, Tuple, Dict, Optional, Set, Any, Callable, Type
 from datetime import datetime
 from enum import Enum
 import importlib
-
+import numpy as np
 # 添加项目根目录到路径
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, PROJECT_ROOT)
@@ -94,121 +94,7 @@ class SimulationThread(QThread if visualization_available else threading.Thread)
         self.simulation_speed = 1.0  # 模拟速度倍率
         self.last_update_time = 0    # 上次UI更新时间
         self.min_update_interval = 0.05  # 最小UI更新间隔（秒）
-    def get_update_data(self):
-        """获取用于可视化更新的数据，确保线程安全和数据一致性"""
-        try:
-            # 使用可重入锁保护数据访问
-            with self.data_lock:
-                # 创建数据快照，使用深拷贝避免数据竞争
-                vehicles_data = {}
-                paths_data = {}
-                
-                # 安全地获取车辆位置数据
-                for v in self.vehicles:
-                    try:
-                        if not v or not isinstance(v, MiningVehicle):
-                            continue
-                            
-                        if hasattr(v, 'vehicle_id') and hasattr(v, 'current_location'):
-                            if v.current_location is not None and len(v.current_location) == 2:
-                                # 验证坐标值的有效性
-                                x, y = v.current_location
-                                if isinstance(x, (int, float)) and isinstance(y, (int, float)):
-                                    vehicles_data[v.vehicle_id] = (float(x), float(y))  # 统一使用浮点数
-                    except Exception as e:
-                        logger.warning(f"处理车辆{getattr(v, 'vehicle_id', '未知')}数据时出错: {str(e)}")
-                        continue
-                
-                # 安全地获取路径数据
-                for v in self.vehicles:
-                    try:
-                        if not v or not isinstance(v, MiningVehicle):
-                            continue
-                            
-                        if hasattr(v, 'vehicle_id') and hasattr(v, 'current_task') and v.current_task:
-                            vid_str = str(v.vehicle_id)
-                            if hasattr(v, 'current_path') and v.current_path:
-                                path = v.current_path
-                                
-                                if path and isinstance(path, (list, tuple)):
-                                    # 验证路径中每个点的有效性
-                                    valid_path = []
-                                    for point in path:
-                                        if isinstance(point, (list, tuple)) and len(point) == 2:
-                                            x, y = point
-                                            if isinstance(x, (int, float)) and isinstance(y, (int, float)):
-                                                valid_path.append((float(x), float(y)))  # 统一使用浮点数
-                                    
-                                    if valid_path:  # 只保存有效的路径
-                                        paths_data[v.vehicle_id] = valid_path
-                    except Exception as e:
-                        logger.warning(f"处理车辆{getattr(v, 'vehicle_id', '未知')}路径时出错: {str(e)}")
-                        continue
-                
-                # 更新状态统计信息
-                self._update_stats()
-                
-                # 构建完整的更新数据，包含错误恢复机制
-                try:
-                    tasks_completed = max(0, self.tasks_completed)
-                    total_tasks = len(self.tasks)
-                    conflicts_detected = max(0, self.conflicts_detected)
-                    conflicts_resolved = max(0, self.conflicts_resolved)
-                    
-                    # 获取障碍物数据，确保数据有效性
-                    obstacles = []
-                    if hasattr(self, 'obstacles') and self.obstacles:
-                        for obs in self.obstacles:
-                            if isinstance(obs, (list, tuple)) and len(obs) == 2:
-                                x, y = obs
-                                if isinstance(x, (int, float)) and isinstance(y, (int, float)):
-                                    obstacles.append((float(x), float(y)))
-                    
-                    update_data = {
-                        'vehicles': vehicles_data,
-                        'paths': paths_data,
-                        'tasks_completed': tasks_completed,
-                        'total_tasks': total_tasks,
-                        'conflicts_detected': conflicts_detected,
-                        'conflicts_resolved': conflicts_resolved,
-                        'stats': self.stats,  # 包含完整统计信息
-                        'timestamp': time.time(),
-                        'obstacles': obstacles,  # 注意：可能是大量数据，考虑只在初始化时发送一次
-                        'status': 'ok'
-                    }
-                    
-                    # 验证数据完整性和类型
-                    if not all(isinstance(update_data[key], dict) for key in ['vehicles', 'paths']) or \
-                    not all(isinstance(update_data[key], (int, float)) for key in 
-                            ['tasks_completed', 'total_tasks', 'conflicts_detected', 'conflicts_resolved']):
-                        raise ValueError("数据格式或类型无效")
-                    
-                    return update_data
-                    
-                except Exception as e:
-                    logger.error(f"构建更新数据时发生错误: {str(e)}")
-                    raise  # 向上传递错误
-                
-        except Exception as e:
-            logger.error(f"获取更新数据时发生错误: {str(e)}")
-            # 返回最小有效数据集
-            return {
-                'vehicles': {},
-                'paths': {},
-                'tasks_completed': 0,
-                'total_tasks': 0,
-                'conflicts_detected': 0,
-                'conflicts_resolved': 0,
-                'stats': {
-                    'run_time': time.time() - self.stats.get('start_time', time.time()),
-                    'vehicle_states': {},
-                    'vehicle_utilization': 0.0
-                },
-                'obstacles': [],
-                'timestamp': time.time(),
-                'status': 'error',
-                'error': str(e)
-            }    
+
     def run(self):
         """线程运行函数"""
         try:
@@ -638,6 +524,8 @@ class SystemController:
             print(f"\n当前调度算法: {self.dispatcher_type.value}")    
     def print_final_results(self, total_time):
         """打印最终结果"""
+        with self.data_lock:
+            self._update_stats()
         print("\n" + "="*50)
         print("露天矿多车协同调度系统 - 模拟结果")
         print("="*50)
@@ -778,7 +666,71 @@ class SystemController:
         
         logger.info(f"已创建{len(obstacles)}个障碍物点")
         return obstacles
-
+    # Improvements to SystemController class in master.py
+    def get_update_data(self):
+        """获取用于可视化更新的数据，确保线程安全和数据一致性"""
+        try:
+            # 使用可重入锁保护数据访问
+            with self.data_lock:
+                # 创建数据快照
+                vehicles_data = {}
+                paths_data = {}
+                
+                # 安全地获取车辆位置数据
+                for v in self.vehicles:
+                    try:
+                        if v and hasattr(v, 'vehicle_id') and hasattr(v, 'current_location'):
+                            if v.current_location and len(v.current_location) == 2:
+                                vehicles_data[v.vehicle_id] = (float(v.current_location[0]), float(v.current_location[1]))
+                                
+                                # 同时更新路径数据 - 重要部分
+                                if hasattr(v, 'current_path') and v.current_path and len(v.current_path) > 1:
+                                    # 确保路径有效
+                                    valid_path = []
+                                    for p in v.current_path:
+                                        if isinstance(p, (list, tuple)) and len(p) == 2:
+                                            valid_path.append((float(p[0]), float(p[1])))
+                                    
+                                    if valid_path:
+                                        paths_data[v.vehicle_id] = valid_path
+                                        
+                    except Exception as e:
+                        logger.warning(f"处理车辆{getattr(v, 'vehicle_id', '未知')}数据时出错: {str(e)}")
+                        continue
+                
+                # 更新状态统计信息
+                self._update_stats()
+                
+                # 构建更新数据
+                update_data = {
+                    'vehicles': vehicles_data,
+                    'paths': paths_data,
+                    'tasks_completed': self.stats['tasks_completed'],
+                    'total_tasks': len(self.tasks),
+                    'conflicts_detected': self.stats['conflicts_detected'],
+                    'conflicts_resolved': self.stats['conflicts_resolved'],
+                    'stats': self.stats,
+                    'obstacles': list(self.obstacles)
+                }
+                
+                return update_data
+                
+        except Exception as e:
+            logger.error(f"获取更新数据时发生错误: {str(e)}")
+            return {
+                'vehicles': {},
+                'paths': {},
+                'tasks_completed': 0,
+                'total_tasks': 0,
+                'conflicts_detected': 0,
+                'conflicts_resolved': 0,
+                'stats': {
+                    'run_time': 0,
+                    'vehicle_states': {},
+                    'vehicle_utilization': 0.0
+                },
+                'obstacles': []
+            }
     def _is_near_safe_points(self, point, safe_points, safe_radius):
         """检查点是否靠近安全点"""
         x, y = point
@@ -804,6 +756,9 @@ class SystemController:
                         # 确保路径索引在有效范围内
                         if vehicle.path_index < len(vehicle.current_path):
                             vehicle.current_location = vehicle.current_path[vehicle.path_index]
+                            
+                            # 更新路径记录 - 添加此行
+                            self.vehicle_paths[str(vehicle.vehicle_id)] = vehicle.current_path
                         
                             # 检查是否到达终点
                             if vehicle.path_index >= len(vehicle.current_path) - 1:
@@ -822,7 +777,7 @@ class SystemController:
             # 验证车辆和任务
             if not vehicle or not hasattr(vehicle, 'current_task') or not vehicle.current_task:
                 return
-                
+                    
             # 获取任务信息
             task = vehicle.current_task
             task_id = task.task_id if hasattr(task, 'task_id') else '未知'
@@ -831,29 +786,30 @@ class SystemController:
             task.is_completed = True
             
             with self.data_lock:
+                # 更新任务统计
                 self.tasks_completed += 1
                 self.stats['tasks_completed'] += 1
                 
                 # 避免重复添加到已完成任务列表
                 if task not in self.completed_tasks:
                     self.completed_tasks.append(task)
-            
-            # 更新车辆状态
-            vehicle.current_task = None
-            vehicle.state = VehicleState.IDLE
-            vehicle.current_path = []
-            vehicle.path_index = 0
-            
-            # 从路径记录中移除
-            vid_str = str(vehicle.vehicle_id)
-            with self.data_lock:
-                if vid_str in self.vehicle_paths:
-                    del self.vehicle_paths[vid_str]
-            
+                
+                # 更新车辆状态
+                vehicle.current_task = None
+                vehicle.state = VehicleState.IDLE
+                vehicle.current_path = []
+                vehicle.path_index = 0
+                
+                # 清理路径记录 - 确保路径不再显示
+                if str(vehicle.vehicle_id) in self.vehicle_paths:
+                    del self.vehicle_paths[str(vehicle.vehicle_id)]
+                
+                # 打印明确的完成消息
+                print(f"Vehicle {vehicle.vehicle_id} completed task {task_id}")
+                
             logger.info(f"车辆{vehicle.vehicle_id}完成任务{task_id}")
         except Exception as e:
             logger.error(f"处理任务完成时发生错误: {str(e)}")
-            # 尝试恢复到安全状态
             if vehicle:
                 vehicle.state = VehicleState.IDLE
                 vehicle.current_path = []
@@ -1265,8 +1221,14 @@ class MiningSystemUI(QMainWindow):
     
     def init_heatmap(self):
         """初始化热图"""
+        # 获取地图尺寸
+        map_size = self.controller.config.get('map_size', 200)
+        
+        # 确保热图数据维度匹配地图尺寸
+        self.heatmap_data = np.zeros((map_size, map_size))
+        
         # 创建热图图像项
-        self.heatmap_img = pg.ImageItem()
+        self.heatmap_img = pg.ImageItem(self.heatmap_data.T)  # 预先设置图像数据
         self.map_view.addItem(self.heatmap_img)
         
         # 设置颜色映射
@@ -1281,11 +1243,10 @@ class MiningSystemUI(QMainWindow):
         self.heatmap_img.setLookupTable(cmap.getLookupTable())
         
         # 设置显示范围
-        map_size = self.controller.config.get('map_size', 200)
         self.heatmap_img.setRect(pg.QtCore.QRectF(0, 0, map_size, map_size))
     
     def update_heatmap(self, paths):
-        """更新热图"""
+        """更新热图数据"""
         if not self.show_heatmap_cb.isChecked():
             return
             
@@ -1295,6 +1256,9 @@ class MiningSystemUI(QMainWindow):
         # 衰减现有热图数据
         self.heatmap_data *= 0.98
         
+        # 获取地图尺寸 - 修复这里
+        map_size = self.controller.config.get('map_size', 200)
+        
         # 为每个路径添加热度
         for _, path in paths.items():
             if not path or len(path) < 2:
@@ -1302,15 +1266,17 @@ class MiningSystemUI(QMainWindow):
                 
             for point in path:
                 x, y = int(point[0]), int(point[1])
-                map_size = self.controller.config.get('map_size', 200)
                 if 0 <= x < map_size and 0 <= y < map_size:
-                    self.heatmap_data[x, y] += 0.5
+                    # 确保索引不越界
+                    if x < self.heatmap_data.shape[0] and y < self.heatmap_data.shape[1]:
+                        self.heatmap_data[x, y] += 0.5
                     
                     # 添加周围点的热度（模糊效果）
                     for dx in [-1, 0, 1]:
                         for dy in [-1, 0, 1]:
                             nx, ny = x + dx, y + dy
-                            if 0 <= nx < map_size and 0 <= ny < map_size:
+                            if (0 <= nx < map_size and 0 <= ny < map_size and 
+                                nx < self.heatmap_data.shape[0] and ny < self.heatmap_data.shape[1]):
                                 self.heatmap_data[nx, ny] += 0.1
         
         # 更新热图显示
@@ -1322,6 +1288,9 @@ class MiningSystemUI(QMainWindow):
             with self.ui_lock:
                 if not data or not isinstance(data, dict):
                     return
+                    
+                # Debug output
+                print(f"Updating UI with data: vehicles={len(data.get('vehicles', {}))}, paths={len(data.get('paths', {}))}")
                     
                 # 更新地图
                 self.update_map_display(data)
@@ -1340,62 +1309,64 @@ class MiningSystemUI(QMainWindow):
                 QApplication.processEvents()
         except Exception as e:
             logger.error(f"更新UI时出错: {str(e)}")
+            # Print the full traceback for debugging
+            import traceback
+            traceback.print_exc()
     
-    def update_map_display(self, data):
-        """更新地图显示"""
+    def update_paths_display(self, paths):
+        """更新路径显示"""
         try:
-            # 清除旧的车辆图标
-            for item in getattr(self, 'vehicle_markers', {}).values():
-                self.map_view.removeItem(item['marker'])
-                if item['label']:
-                    self.map_view.removeItem(item['label'])
+            # 清除旧的路径
+            for vid, marker_info in self.vehicle_markers.items():
+                if marker_info['path_item'] is not None:
+                    self.map_view.removeItem(marker_info['path_item'])
+                    marker_info['path_item'] = None
             
-            # 初始化车辆标记字典
-            if not hasattr(self, 'vehicle_markers'):
-                self.vehicle_markers = {}
-            
-            # 更新车辆位置
-            vehicles_data = data.get('vehicles', {})
-            for vid, pos in vehicles_data.items():
-                # 查找对应的车辆对象
-                vehicle = next((v for v in self.controller.vehicles if v.vehicle_id == vid), None)
-                if not vehicle:
+            # 绘制新的路径
+            for vid_str, path in paths.items():
+                vid = int(vid_str) if isinstance(vid_str, str) else vid_str
+                
+                if not path or len(path) < 2:
                     continue
                 
+                # 确保路径有效
+                valid_path = []
+                for p in path:
+                    if isinstance(p, (list, tuple)) and len(p) == 2:
+                        x, y = p
+                        if isinstance(x, (int, float)) and isinstance(y, (int, float)):
+                            valid_path.append((float(x), float(y)))
+                
+                if len(valid_path) < 2:
+                    continue
+                    
+                # 提取路径坐标
+                x_coords = [p[0] for p in valid_path]
+                y_coords = [p[1] for p in valid_path]
+                
                 # 获取车辆颜色
+                vehicle = next((v for v in self.controller.vehicles if v.vehicle_id == vid), None)
                 color = getattr(vehicle, 'color', pg.intColor(vid % 10))
                 
-                # 创建或更新车辆标记
-                if vid not in self.vehicle_markers:
-                    # 创建车辆标记
-                    marker = pg.ScatterPlotItem(
-                        [pos[0]], [pos[1]],
-                        size=10, brush=color, pen=pg.mkPen(color, width=2)
-                    )
+                # 创建路径线
+                path_item = pg.PlotDataItem(
+                    x_coords, y_coords,
+                    pen=pg.mkPen(color, width=2, style=Qt.DashLine),
+                    name=f"Vehicle {vid} Path"
+                )
+                
+                self.map_view.addItem(path_item)
+                
+                # 更新字典
+                if vid in self.vehicle_markers:
+                    self.vehicle_markers[vid]['path_item'] = path_item
                     
-                    # 创建标签
-                    label = pg.TextItem(str(vid), anchor=(0.5, 1.0))
-                    label.setPos(pos[0], pos[1])
-                    
-                    self.map_view.addItem(marker)
-                    self.map_view.addItem(label)
-                    
-                    self.vehicle_markers[vid] = {
-                        'marker': marker,
-                        'label': label,
-                        'path_item': None
-                    }
-                else:
-                    # 更新现有标记
-                    self.vehicle_markers[vid]['marker'].setData([pos[0]], [pos[1]])
-                    self.vehicle_markers[vid]['label'].setPos(pos[0], pos[1])
-            
-            # 更新路径显示
-            if self.show_paths_cb.isChecked():
-                self.update_paths_display(data.get('paths', {}))
+                print(f"Added path for vehicle {vid}: {len(valid_path)} points, color={color}")
                 
         except Exception as e:
-            logger.error(f"更新地图显示时出错: {str(e)}")
+            logger.error(f"更新路径显示时出错: {str(e)}")
+            import traceback
+            traceback.print_exc()
     
     def update_paths_display(self, paths):
         """更新路径显示"""

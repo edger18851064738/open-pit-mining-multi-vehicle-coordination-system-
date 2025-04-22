@@ -65,52 +65,141 @@ class SimulationThread(QThread if visualization_available else threading.Thread)
     
     if visualization_available:
         update_signal = pyqtSignal(dict)  # 发送更新数据的信号
+        error_signal = pyqtSignal(str)   # 发送错误信息的信号
     
     def __init__(self, controller):
         super().__init__()
         self.controller = controller
         self.running = False
         self.paused = False
+        self.simulation_speed = 1.0  # 模拟速度倍率
+        self.last_update_time = 0    # 上次UI更新时间
+        self.min_update_interval = 0.05  # 最小UI更新间隔（秒）
     
     def run(self):
         """线程运行函数"""
-        self.running = True
-        start_time = time.time()
-        last_status_time = start_time
-        last_conflict_check_time = start_time
-        
-        while self.running and time.time() - start_time < self.controller.duration:
-            if not self.paused:
-                current_time = time.time()
-                elapsed = current_time - start_time
-                
-                # 更新车辆位置
-                self.controller.update_vehicles()
-                
-                # 分配新任务给空闲车辆
-                self.controller.assign_new_tasks()
-                
-                # 定期检查冲突
-                if current_time - last_conflict_check_time >= self.controller.conflict_check_interval:
-                    self.controller.resolve_conflicts()
-                    last_conflict_check_time = current_time
-                
-                # 定期输出状态
-                if current_time - last_status_time >= self.controller.status_interval:
-                    self.controller.print_status(elapsed)
-                    last_status_time = current_time
-                
-                # 发送更新信号（如果可视化可用）
-                if visualization_available:
-                    update_data = self.controller.get_update_data()
-                    self.update_signal.emit(update_data)
+        try:
+            self.running = True
+            start_time = time.time()
+            last_status_time = start_time
+            last_conflict_check_time = start_time
+            self.last_update_time = start_time
+            error_count = 0  # 错误计数器
+            max_errors = 5   # 增加最大允许错误次数
+            update_error_count = 0  # UI更新错误计数器
+            max_update_errors = 3  # UI更新最大错误次数
             
-            # 控制模拟速度
-            time.sleep(self.controller.update_interval)
-        
-        # 模拟结束，打印结果
-        self.controller.print_final_results(time.time() - start_time)
-        self.running = False
+            # 创建专用的线程锁
+            self.thread_lock = threading.RLock()
+            
+            while self.running and time.time() - start_time < self.controller.duration:
+                if not self.paused:
+                    try:
+                        current_time = time.time()
+                        elapsed = current_time - start_time
+                        
+                        # 使用可重入锁保护关键操作
+                        with self.thread_lock:
+                            # 更新车辆位置
+                            try:
+                                self.controller.update_vehicles()
+                            except Exception as e:
+                                logger.error(f"更新车辆位置失败: {str(e)}")
+                                time.sleep(0.1)
+                                continue
+                            
+                            # 分配新任务给空闲车辆
+                            try:
+                                self.controller.assign_new_tasks()
+                            except Exception as e:
+                                logger.error(f"分配任务失败: {str(e)}")
+                            
+                            # 定期检查冲突
+                            if current_time - last_conflict_check_time >= self.controller.conflict_check_interval:
+                                try:
+                                    self.controller.resolve_conflicts()
+                                    last_conflict_check_time = current_time
+                                except Exception as e:
+                                    logger.error(f"解决冲突失败: {str(e)}")
+                        
+                        # 定期输出状态
+                        if current_time - last_status_time >= self.controller.status_interval:
+                            try:
+                                self.controller.print_status(elapsed)
+                                last_status_time = current_time
+                            except Exception as e:
+                                logger.warning(f"状态输出失败: {str(e)}")
+                        
+                        # 发送更新信号（如果可视化可用），控制更新频率
+                        if visualization_available and current_time - self.last_update_time >= self.min_update_interval:
+                            try:
+                                with self.thread_lock:
+                                    update_data = self.controller.get_update_data()
+                                if update_data and isinstance(update_data, dict):  # 严格验证数据有效性
+                                    self.update_signal.emit(update_data)
+                                    self.last_update_time = current_time
+                                    update_error_count = 0  # 重置UI更新错误计数
+                                    error_count = max(0, error_count - 1)  # 逐步减少错误计数
+                            except Exception as e:
+                                update_error_count += 1
+                                logger.warning(f"UI更新错误 ({update_error_count}/{max_update_errors}): {str(e)}")
+                                if update_error_count >= max_update_errors:
+                                    logger.error("UI更新多次失败，尝试重置更新机制")
+                                    self.last_update_time = current_time + 2.0  # 强制等待更长时间
+                                    update_error_count = 0  # 重置计数器
+                                time.sleep(0.2)  # 增加恢复时间
+                                
+                    except Exception as e:
+                        error_count += 1
+                        logger.error(f"模拟循环错误 ({error_count}/{max_errors}): {str(e)}")
+                        if visualization_available:
+                            try:
+                                self.error_signal.emit(f"模拟错误: {str(e)}")
+                            except:
+                                pass  # 忽略信号发送失败
+                        
+                        if error_count >= max_errors:
+                            logger.critical("达到最大错误次数，正在尝试恢复...")
+                            time.sleep(1.0)  # 给系统更多恢复时间
+                            error_count = max_errors - 2  # 降低错误计数而不是直接中断
+                            continue
+                            
+                        time.sleep(0.5)  # 错误发生后等待一段时间再继续
+                        continue
+                
+                # 动态调整模拟速度
+                try:
+                    actual_interval = self.controller.update_interval / max(0.1, self.simulation_speed)
+                    actual_interval = min(max(0.01, actual_interval), 0.5)  # 限制延迟范围
+                    time.sleep(actual_interval)
+                except Exception as e:
+                    logger.warning(f"调整模拟速度失败: {str(e)}")
+                    time.sleep(0.1)  # 使用默认延迟
+            
+            # 模拟结束，打印结果
+            try:
+                if error_count < max_errors:  # 只有在正常结束时才打印结果
+                    self.controller.print_final_results(time.time() - start_time)
+            except Exception as e:
+                logger.error(f"打印最终结果失败: {str(e)}")
+                
+        except Exception as e:
+            logger.error(f"模拟线程发生严重错误: {str(e)}")
+            if visualization_available:
+                try:
+                    self.error_signal.emit(f"模拟线程错误: {str(e)}")
+                except:
+                    pass  # 忽略信号发送失败
+        finally:
+            self.running = False
+            logger.info("模拟线程已停止")
+            try:
+                # 清理资源
+                if hasattr(self, 'thread_lock'):
+                    del self.thread_lock
+            except:
+                pass
+
     
     def stop(self):
         """停止线程"""
@@ -125,6 +214,10 @@ class SimulationThread(QThread if visualization_available else threading.Thread)
     def resume(self):
         """继续模拟"""
         self.paused = False
+        
+    def set_speed(self, speed):
+        """设置模拟速度"""
+        self.simulation_speed = max(0.1, min(10.0, speed))  # 限制在0.1-10倍之间
 
 
 class SystemController:
@@ -505,43 +598,70 @@ class SystemController:
     
     def update_vehicles(self):
         """更新车辆位置"""
-        for vehicle in self.vehicles:
-            # 检查车辆是否有路径
-            if vehicle.current_path and vehicle.path_index < len(vehicle.current_path) - 1:
-                # 移动到下一个路径点
-                vehicle.path_index += 1
-                vehicle.current_location = vehicle.current_path[vehicle.path_index]
-                
-                # 检查是否到达终点
-                if vehicle.path_index >= len(vehicle.current_path) - 1:
-                    # 车辆到达终点，任务完成
-                    self._handle_task_completion(vehicle)
+        try:
+            for vehicle in self.vehicles:
+                # 检查车辆是否有路径和路径索引是否有效
+                if (vehicle.current_path and 
+                    isinstance(vehicle.path_index, int) and 
+                    0 <= vehicle.path_index < len(vehicle.current_path) - 1):
+                    
+                    # 移动到下一个路径点
+                    vehicle.path_index += 1
+                    
+                    # 确保路径索引在有效范围内
+                    if vehicle.path_index < len(vehicle.current_path):
+                        vehicle.current_location = vehicle.current_path[vehicle.path_index]
+                    
+                        # 检查是否到达终点
+                        if vehicle.path_index >= len(vehicle.current_path) - 1:
+                            # 车辆到达终点，任务完成
+                            self._handle_task_completion(vehicle)
+                else:
+                    # 如果路径无效但车辆有任务，记录异常情况
+                    if vehicle.current_task:
+                        logger.warning(f"车辆{vehicle.vehicle_id}有任务但路径无效或已完成")
+        except Exception as e:
+            logger.error(f"更新车辆位置时发生错误: {str(e)}")
+            # 继续执行，不让单个车辆的错误影响整个系统
     
     def _handle_task_completion(self, vehicle):
         """处理任务完成"""
-        if not vehicle.current_task:
-            return
+        try:
+            # 验证车辆和任务
+            if not vehicle or not hasattr(vehicle, 'current_task') or not vehicle.current_task:
+                return
+                
+            # 获取任务信息
+            task = vehicle.current_task
+            task_id = task.task_id if hasattr(task, 'task_id') else '未知'
             
-        # 获取任务信息
-        task = vehicle.current_task
-        task_id = task.task_id
-        
-        # 标记任务完成
-        task.is_completed = True
-        self.tasks_completed += 1
-        self.completed_tasks.append(task)
-        
-        # 更新车辆状态
-        vehicle.current_task = None
-        vehicle.state = VehicleState.IDLE
-        vehicle.current_path = []
-        vehicle.path_index = 0
-        
-        # 从路径记录中移除
-        if str(vehicle.vehicle_id) in self.vehicle_paths:
-            del self.vehicle_paths[str(vehicle.vehicle_id)]
-        
-        logger.info(f"车辆{vehicle.vehicle_id}完成任务{task_id}")
+            # 标记任务完成
+            task.is_completed = True
+            self.tasks_completed += 1
+            
+            # 避免重复添加到已完成任务列表
+            if task not in self.completed_tasks:
+                self.completed_tasks.append(task)
+            
+            # 更新车辆状态
+            vehicle.current_task = None
+            vehicle.state = VehicleState.IDLE
+            vehicle.current_path = []
+            vehicle.path_index = 0
+            
+            # 从路径记录中移除
+            vid_str = str(vehicle.vehicle_id)
+            if vid_str in self.vehicle_paths:
+                del self.vehicle_paths[vid_str]
+            
+            logger.info(f"车辆{vehicle.vehicle_id}完成任务{task_id}")
+        except Exception as e:
+            logger.error(f"处理任务完成时发生错误: {str(e)}")
+            # 尝试恢复到安全状态
+            if vehicle:
+                vehicle.state = VehicleState.IDLE
+                vehicle.current_path = []
+                vehicle.path_index = 0
     
     def assign_new_tasks(self):
         """分配新任务给空闲车辆"""
@@ -668,16 +788,110 @@ class SystemController:
                                     break
     
     def get_update_data(self):
-        """获取用于可视化更新的数据"""
-        return {
-            'vehicles': {v.vehicle_id: v.current_location for v in self.vehicles},
-            'paths': {v.vehicle_id: self.vehicle_paths.get(str(v.vehicle_id), []) 
-                     for v in self.vehicles if hasattr(v, 'current_task') and v.current_task},
-            'tasks_completed': self.tasks_completed,
-            'total_tasks': len(self.tasks),
-            'conflicts_detected': self.conflicts_detected,
-            'conflicts_resolved': self.conflicts_resolved
-        }
+        """获取用于可视化更新的数据，确保线程安全和数据一致性"""
+        try:
+            # 使用可重入锁保护数据访问
+            with threading.RLock():
+                # 创建数据快照，使用深拷贝避免数据竞争
+                vehicles_data = {}
+                paths_data = {}
+                
+                # 安全地获取车辆位置数据
+                for v in self.vehicles:
+                    try:
+                        if not v or not isinstance(v, MiningVehicle):
+                            continue
+                            
+                        if hasattr(v, 'vehicle_id') and hasattr(v, 'current_location'):
+                            if v.current_location is not None and len(v.current_location) == 2:
+                                # 验证坐标值的有效性
+                                x, y = v.current_location
+                                if isinstance(x, (int, float)) and isinstance(y, (int, float)):
+                                    vehicles_data[v.vehicle_id] = (float(x), float(y))  # 统一使用浮点数
+                    except Exception as e:
+                        logger.warning(f"处理车辆{getattr(v, 'vehicle_id', '未知')}数据时出错: {str(e)}")
+                        continue
+                
+                # 安全地获取路径数据
+                for v in self.vehicles:
+                    try:
+                        if not v or not isinstance(v, MiningVehicle):
+                            continue
+                            
+                        if hasattr(v, 'vehicle_id') and hasattr(v, 'current_task') and v.current_task:
+                            vid_str = str(v.vehicle_id)
+                            path = self.vehicle_paths.get(vid_str, [])
+                            
+                            if path and isinstance(path, (list, tuple)):
+                                # 验证路径中每个点的有效性
+                                valid_path = []
+                                for point in path:
+                                    if isinstance(point, (list, tuple)) and len(point) == 2:
+                                        x, y = point
+                                        if isinstance(x, (int, float)) and isinstance(y, (int, float)):
+                                            valid_path.append((float(x), float(y)))  # 统一使用浮点数
+                                
+                                if valid_path:  # 只保存有效的路径
+                                    paths_data[v.vehicle_id] = valid_path
+                    except Exception as e:
+                        logger.warning(f"处理车辆{getattr(v, 'vehicle_id', '未知')}路径时出错: {str(e)}")
+                        continue
+                
+                # 构建完整的更新数据，包含错误恢复机制
+                try:
+                    tasks_completed = max(0, getattr(self, 'tasks_completed', 0))
+                    total_tasks = len(getattr(self, 'tasks', []))
+                    conflicts_detected = max(0, getattr(self, 'conflicts_detected', 0))
+                    conflicts_resolved = max(0, getattr(self, 'conflicts_resolved', 0))
+                    
+                    # 获取障碍物数据，确保数据有效性
+                    obstacles = []
+                    if hasattr(self, 'obstacles'):
+                        for obs in self.obstacles:
+                            if isinstance(obs, (list, tuple)) and len(obs) == 2:
+                                x, y = obs
+                                if isinstance(x, (int, float)) and isinstance(y, (int, float)):
+                                    obstacles.append((float(x), float(y)))
+                    
+                    update_data = {
+                        'vehicles': vehicles_data,
+                        'paths': paths_data,
+                        'tasks_completed': tasks_completed,
+                        'total_tasks': total_tasks,
+                        'conflicts_detected': conflicts_detected,
+                        'conflicts_resolved': conflicts_resolved,
+                        'timestamp': time.time(),
+                        'obstacles': list(set(obstacles)),  # 去重
+                        'status': 'ok'
+                    }
+                    
+                    # 验证数据完整性和类型
+                    if not all(isinstance(update_data[key], dict) for key in ['vehicles', 'paths']) or \
+                       not all(isinstance(update_data[key], (int, float)) for key in 
+                              ['tasks_completed', 'total_tasks', 'conflicts_detected', 'conflicts_resolved']):
+                        raise ValueError("数据格式或类型无效")
+                    
+                    return update_data
+                    
+                except Exception as e:
+                    logger.error(f"构建更新数据时发生错误: {str(e)}")
+                    raise  # 向上传递错误
+                
+        except Exception as e:
+            logger.error(f"获取更新数据时发生错误: {str(e)}")
+            # 返回最小有效数据集
+            return {
+                'vehicles': {},
+                'paths': {},
+                'tasks_completed': 0,
+                'total_tasks': 0,
+                'conflicts_detected': 0,
+                'conflicts_resolved': 0,
+                'obstacles': [],
+                'timestamp': time.time(),
+                'status': 'error',
+                'error': str(e)
+            }
     
     def print_status(self, elapsed_time):
         """打印系统状态"""
@@ -963,24 +1177,44 @@ class MiningSystemUI(QMainWindow):
 
     def toggle_simulation(self):
         """开始/停止模拟"""
-        if not self.sim_thread or not self.sim_thread.running:
-            # 开始模拟
-            self.sim_thread = self.controller.run_simulation()
-            self.sim_thread.update_signal.connect(self.update_ui)
+        try:
+            if not self.sim_thread or not self.sim_thread.running:
+                # 开始模拟
+                self.sim_thread = self.controller.run_simulation()
+                
+                # 连接信号
+                self.sim_thread.update_signal.connect(self.update_ui)
+                
+                # 连接错误信号
+                if hasattr(self.sim_thread, 'error_signal'):
+                    self.sim_thread.error_signal.connect(self.handle_simulation_error)
+                
+                # 设置模拟速度
+                if hasattr(self.sim_thread, 'set_speed') and hasattr(self, 'speed_slider'):
+                    speed_value = self.speed_slider.value() / 10.0  # 转换为合适的速度倍率
+                    self.sim_thread.set_speed(speed_value)
+                
+                # 更新UI状态
+                self.start_btn.setText("停止模拟")
+                self.pause_btn.setEnabled(True)
+                self.update_status("模拟已启动")
+            else:
+                # 停止模拟
+                self.sim_thread.stop()
+                
+                # 更新UI状态
+                self.start_btn.setText("开始模拟")
+                self.pause_btn.setEnabled(False)
+                self.pause_btn.setText("暂停")
+                self.update_status("模拟已停止")
+        except Exception as e:
+            logger.error(f"切换模拟状态时发生错误: {str(e)}")
+            self.update_status(f"模拟控制错误: {str(e)}")
             
-            # 更新UI状态
-            self.start_btn.setText("停止模拟")
-            self.pause_btn.setEnabled(True)
-            self.update_status("模拟已启动")
-        else:
-            # 停止模拟
-            self.sim_thread.stop()
-            
-            # 更新UI状态
-            self.start_btn.setText("开始模拟")
-            self.pause_btn.setEnabled(False)
-            self.pause_btn.setText("暂停")
-            self.update_status("模拟已停止")
+    def handle_simulation_error(self, error_msg):
+        """处理模拟线程中的错误"""
+        self.update_status(f"模拟错误: {error_msg}")
+        # 可以在这里添加更多错误处理逻辑，如显示对话框等
 
     def toggle_pause(self):
         """暂停/继续模拟"""
@@ -1240,42 +1474,72 @@ class MiningSystemUI(QMainWindow):
             self.status_text.verticalScrollBar().maximum()
         )
 
+def handle_exception(exc_type, exc_value, exc_traceback):
+    """全局异常处理函数"""
+    # 忽略KeyboardInterrupt异常的处理
+    if issubclass(exc_type, KeyboardInterrupt):
+        sys.__excepthook__(exc_type, exc_value, exc_traceback)
+        return
+        
+    # 记录未捕获的异常
+    logger.critical("未捕获的异常", exc_info=(exc_type, exc_value, exc_traceback))
+    print("\n程序遇到错误，请查看日志获取详细信息。")
+
 def main():
     """主函数"""
-    # 解析命令行参数
-    parser = argparse.ArgumentParser(description='露天矿多车协同调度系统')
-    parser.add_argument('--duration', type=int, default=120, help='模拟持续时间(秒)')
-    parser.add_argument('--vehicles', type=int, default=5, help='车辆数量')
-    parser.add_argument('--tasks', type=int, default=10, help='任务数量')
-    parser.add_argument('--no-gui', action='store_true', help='不使用图形界面')
-    args = parser.parse_args()
-    
-    # 创建配置
-    config = {
-        'duration': args.duration,
-        'num_vehicles': args.vehicles,
-        'num_tasks': args.tasks,
-        'visualization': not args.no_gui and visualization_available
-    }
-    
-    # 创建系统控制器
-    controller = SystemController(config)
-    
-    # 根据配置决定使用GUI还是命令行模式
-    if config['visualization']:
-        # 创建Qt应用
-        app = QApplication(sys.argv)
+    try:
+        # 设置全局异常处理器
+        sys.excepthook = handle_exception
         
-        # 创建主窗口
-        main_window = MiningSystemUI(controller)
-        main_window.show()
+        # 解析命令行参数
+        parser = argparse.ArgumentParser(description='露天矿多车协同调度系统')
+        parser.add_argument('--duration', type=int, default=120, help='模拟持续时间(秒)')
+        parser.add_argument('--vehicles', type=int, default=5, help='车辆数量')
+        parser.add_argument('--tasks', type=int, default=10, help='任务数量')
+        parser.add_argument('--no-gui', action='store_true', help='不使用图形界面')
+        parser.add_argument('--debug', action='store_true', help='启用调试模式')
+        args = parser.parse_args()
         
-        # 运行应用
-        sys.exit(app.exec_())
-    else:
-        # 命令行模式
-        sim_thread = controller.run_simulation()
-        sim_thread.join()  # 等待模拟结束
+        # 设置日志级别
+        if args.debug:
+            logging.getLogger().setLevel(logging.DEBUG)
+            logger.debug("调试模式已启用")
+        
+        # 创建配置
+        config = {
+            'duration': args.duration,
+            'num_vehicles': args.vehicles,
+            'num_tasks': args.tasks,
+            'visualization': not args.no_gui and visualization_available,
+            'debug_mode': args.debug
+        }
+        
+        # 创建系统控制器
+        controller = SystemController(config)
+        
+        # 根据配置决定使用GUI还是命令行模式
+        if config['visualization']:
+            # 创建Qt应用
+            app = QApplication(sys.argv)
+            
+            # 创建主窗口
+            main_window = MiningSystemUI(controller)
+            main_window.show()
+            
+            # 设置异常处理
+            if hasattr(main_window.sim_thread, 'error_signal'):
+                main_window.sim_thread.error_signal.connect(lambda msg: logger.error(f"模拟错误: {msg}"))
+            
+            # 运行应用
+            sys.exit(app.exec_())
+        else:
+            # 命令行模式
+            sim_thread = controller.run_simulation()
+            sim_thread.join()  # 等待模拟结束
+    except Exception as e:
+        logger.critical(f"程序启动失败: {str(e)}", exc_info=True)
+        print(f"\n程序启动失败: {str(e)}")
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()

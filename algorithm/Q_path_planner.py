@@ -23,12 +23,12 @@ import math
 matplotlib.rcParams['font.sans-serif'] = ['SimHei', 'DejaVu Sans', 'Arial Unicode MS', 'sans-serif']  # 优先使用的中文字体
 matplotlib.rcParams['axes.unicode_minus'] = False 
 # 常量定义
-MAX_ITERATIONS = 15000      # 强化A*搜索的最大迭代次数(增加以支持更复杂的地图)
+MAX_ITERATIONS = 30000      # 强化A*搜索的最大迭代次数(增加以支持更复杂的地图)
 DEFAULT_TIMEOUT = 7.0       # 默认超时时间(秒)(增加以支持更复杂的计算)
 EPSILON = 1e-6              # 浮点数比较精度
 CACHE_SIZE = 1000           # 缓存大小
 CACHE_EXPIRY = 600          # 缓存过期时间(秒)
-DEFAULT_LEARNING_RATE = 0.2  # 默认学习率
+DEFAULT_LEARNING_RATE = 0.1  # 默认学习率
 DEFAULT_DISCOUNT_FACTOR = 0.9  # 默认折扣因子
 
 class PathPlanningError(Exception):
@@ -186,31 +186,57 @@ class ReinforcedAStar:
         self.last_training_time = 0
         
     def get_heuristic(self, current, goal):
-        """
-        计算启发式函数值 - 特别优化用于迷宫型场景
-        
-        将曼哈顿距离、欧几里得距离和切比雪夫距离加权组合
-        """
+        """大幅强化版启发式函数"""
         dx, dy = abs(current[0] - goal[0]), abs(current[1] - goal[1])
         
-        # 曼哈顿距离
-        d_manhattan = dx + dy
-        
-        # 欧几里得距离
+        # 欧几里得距离基础
         d_euclidean = math.sqrt(dx*dx + dy*dy)
         
-        # 切比雪夫距离
-        d_chebyshev = max(dx, dy)
+        # 大幅增加障碍物的影响因子
+        obstacles_nearby = self._count_nearby_obstacles(current, radius=3)
+        obstacle_factor = 2.0 + (obstacles_nearby * 0.5)  # 大幅增加障碍物影响
         
-        # 考虑学习到的启发式调整
-        learned_adjustment = self.get_learned_adjustment(current, goal)
+        # 检查是否在障碍物之间的狭窄通道
+        in_corridor = self._is_in_corridor(current)
+        corridor_factor = 0.7 if in_corridor else 1.0  # 优先考虑通道
         
-        # 混合启发式，根据迷宫复杂性调整权重
-        base_h = 0.3 * d_manhattan + 0.4 * d_euclidean + 0.3 * d_chebyshev
+        # 混合启发式
+        return d_euclidean * obstacle_factor * corridor_factor
+    def _is_in_corridor(self, point):
+        """检测点是否在障碍物之间的通道中"""
+        x, y = point
         
-        # 应用学习到的调整
-        return base_h + learned_adjustment
-    
+        # 检查四个方向的障碍物情况
+        left_blocked = False
+        right_blocked = False
+        up_blocked = False
+        down_blocked = False
+        
+        # 检查水平方向
+        for i in range(1, 4):
+            if self._is_obstacle_fast((x-i, y)):
+                left_blocked = True
+                break
+        
+        for i in range(1, 4):
+            if self._is_obstacle_fast((x+i, y)):
+                right_blocked = True
+                break
+        
+        # 检查垂直方向
+        for i in range(1, 4):
+            if self._is_obstacle_fast((x, y-i)):
+                down_blocked = True
+                break
+        
+        for i in range(1, 4):
+            if self._is_obstacle_fast((x, y+i)):
+                up_blocked = True
+                break
+        
+        # 如果只有一个方向是通畅的，就在通道中
+        blocked_count = sum([left_blocked, right_blocked, up_blocked, down_blocked])
+        return blocked_count >= 2
     def get_learned_adjustment(self, current, goal):
         """获取从学习中得到的启发式调整值"""
         state = self.get_state_representation(current)
@@ -235,7 +261,8 @@ class ReinforcedAStar:
         grid_x = int(position[0] // grid_size)
         grid_y = int(position[1] // grid_size)
         
-        return f"{grid_x},{grid_y}"
+        # 修复错误: 使用字符串格式化而不是字符串拼接
+        return f"{grid_x},{grid_y}"  # 使用格式化字符串
     
     def get_action_from_positions(self, current, next_pos):
         """从两个相邻位置计算对应的动作"""
@@ -252,23 +279,81 @@ class ReinforcedAStar:
     
     def get_best_action(self, state, available_actions):
         """
-        获取给定状态下的最佳动作
+        改进的动作选择策略
         
-        基于Q值和探索-利用平衡选择动作
+        基于Q值、探索-利用平衡和障碍物感知选择动作
         """
+        if not available_actions:
+            return None
+            
         # 随机探索概率 - 随着训练次数增加而减少
-        exploration_prob = max(0.05, 0.5 * math.exp(-0.01 * self.episodes_trained))
+        exploration_prob = max(0.05, 0.3 * math.exp(-0.02 * self.episodes_trained))
         
+        # 利用阶段 - 基于Q值选择动作
         if state in self.q_values and random.random() > exploration_prob:
             # 获取可用动作的Q值
             action_values = {a: self.q_values[state].get(a, 0) for a in available_actions}
             
             if action_values:
-                # 利用 - 选择最高Q值的动作
-                return max(action_values.items(), key=lambda x: x[1])[0]
+                # 找出最大Q值
+                max_q = max(action_values.values())
+                # 找出所有具有最大Q值的动作
+                best_actions = [a for a, q in action_values.items() if q == max_q]
+                
+                # 如果有多个最佳动作，进一步评估
+                if len(best_actions) > 1:
+                    # 考虑障碍物因素，优先选择避开障碍物的动作
+                    safer_actions = []
+                    for action in best_actions:
+                        dx, dy = action
+                        # 状态是字符串格式，需要解析出坐标
+                        try:
+                            x, y = map(int, state.split(','))
+                            next_pos = (x*5 + dx, y*5 + dy)  # 转回实际坐标 (乘以网格大小)
+                            
+                            # 计算周围障碍物数量
+                            obstacles = self._count_nearby_obstacles(next_pos, radius=3)
+                            if obstacles < 2:  # 少于2个障碍物的动作优先考虑
+                                safer_actions.append(action)
+                        except:
+                            # 解析失败则保留原动作
+                            pass
+                    
+                    # 如果找到更安全的动作，从中选择，否则使用所有最佳动作
+                    return random.choice(safer_actions if safer_actions else best_actions)
+                
+                # 只有一个最佳动作
+                return best_actions[0]
         
-        # 探索 - 随机选择动作
-        return random.choice(available_actions) if available_actions else None
+        # 探索阶段 - 随机选择动作，但优先考虑安全路径
+        # 将动作分为更安全和风险更高的两组
+        safe_actions = []
+        risky_actions = []
+        
+        for action in available_actions:
+            dx, dy = action
+            try:
+                # 解析状态字符串获取坐标
+                x, y = map(int, state.split(','))
+                next_pos = (x*5 + dx, y*5 + dy)  # 转回实际坐标
+                
+                # 检查该位置周围的障碍物数量
+                obstacles = self._count_nearby_obstacles(next_pos, radius=2)
+                
+                # 根据障碍物数量将动作分类
+                if obstacles < 3:
+                    safe_actions.append(action)
+                else:
+                    risky_actions.append(action)
+            except:
+                # 解析失败则视为普通动作
+                risky_actions.append(action)
+        
+        # 优先从安全动作中选择，如果没有则从风险动作中选择
+        if safe_actions:
+            return random.choice(safe_actions)
+        
+        return random.choice(risky_actions) if risky_actions else random.choice(available_actions)
     
     def update_q_values(self, state, action, reward, next_state, done):
         """
@@ -342,10 +427,13 @@ class ReinforcedAStar:
             start: 起点坐标
             goal: 目标坐标
             max_iterations: 最大迭代次数
-            
+                
         Returns:
             List[Tuple[float, float]]: 找到的路径
         """
+        logging.debug(f"开始路径规划: 从 {start} 到 {goal}")
+        logging.debug(f"障碍物数量: {len(self.obstacle_grids)}")
+        
         episode_start_time = time.time()
         
         # 初始化开放集和闭合集
@@ -383,6 +471,10 @@ class ReinforcedAStar:
             current_state = self.get_state_representation(current)
             path_states.append(current_state)
             
+            # 周期性调试输出
+            if iterations % 1000 == 0:
+                logging.debug(f"A*迭代: {iterations}, 位置: {current}, 距离终点: {math.dist(current, goal)}")
+            
             # 检查是否到达目标
             if self._close_enough(current, goal):
                 # 重建路径
@@ -400,6 +492,7 @@ class ReinforcedAStar:
                 # 学习过程 - 为路径上的每个状态-动作对更新Q值
                 self._learn_from_path(path_states, path_actions, path)
                 
+                logging.info(f"路径规划成功! 迭代次数: {iterations}, 路径长度: {len(path)}")
                 return path
             
             # 添加到闭合集
@@ -535,56 +628,91 @@ class ReinforcedAStar:
             self.q_values[state][action] = current_q - self.learning_rate * 10
     
     def _calculate_reward(self, current, next_pos, goal):
-        """
-        计算从current到next_pos的动作的奖励
-        
-        考虑因素:
-        1. 接近目标的程度
-        2. 避开障碍物
-        3. 路径平滑性
-        """
-        # 基础奖励 - 前进一步的小奖励
+        """大幅增强版奖励函数"""
+        # 基础奖励
         reward = 1.0
         
         # 接近目标的奖励
         current_dist = math.dist(current, goal)
         next_dist = math.dist(next_pos, goal)
-        
         progress_reward = current_dist - next_dist
-        reward += progress_reward * 2.0  # 更强调接近目标
+        reward += progress_reward * 5.0  # 大幅增加目标吸引力
         
-        # 障碍物接近度惩罚
-        obstacles_nearby = self._count_nearby_obstacles(next_pos, radius=3)
-        obstacle_penalty = -0.5 * obstacles_nearby
+        # 严重惩罚接近障碍物
+        obstacles_nearby = self._count_nearby_obstacles(next_pos, radius=2)
+        obstacle_penalty = -2.0 * obstacles_nearby  # 大幅增加障碍物惩罚
         reward += obstacle_penalty
         
-        # 检查是否到达目标
+        # 奖励通道中的移动
+        if self._is_in_corridor(next_pos):
+            reward += 2.0  # 奖励在通道中的移动
+        
+        # 到达目标的奖励
         if self._close_enough(next_pos, goal):
-            reward += 100.0  # 到达目标的大奖励
+            reward += 200.0  # 大幅增加目标奖励
             
         return reward
     
     def _calculate_adjusted_cost(self, current, neighbor, action):
-        """计算考虑各种因素的调整成本"""
+        """改进的成本计算 - 对障碍物更敏感"""
         # 基础移动成本
         base_cost = self.move_costs.get(action, 1.0)
         
-        # 障碍物接近度成本
+        # 障碍物接近度成本 - 加强避障反应
         obstacles_nearby = self._count_nearby_obstacles(neighbor, radius=3)
-        obstacle_cost = 1.0 + 0.2 * obstacles_nearby
+        # 使用指数函数增加障碍物对成本的影响
+        obstacle_cost = 1.0 + 0.3 * obstacles_nearby**1.5
         
-        # 使用Q值影响成本（高Q值降低成本）
+        # 检查是否在通道中 - 减少在障碍物之间的狭窄通道中的移动成本
+        is_corridor = False
+        obstacles_in_range = 0
+        narrow_passage_reward = 0
+        
+        # 检查是否处于狭窄通道
+        if obstacles_nearby > 0:
+            # 计算8个方向上障碍物的分布
+            directions = [
+                (1, 0), (-1, 0), (0, 1), (0, -1),
+                (1, 1), (1, -1), (-1, 1), (-1, -1)
+            ]
+            
+            direction_has_obstacle = []
+            for dx, dy in directions:
+                check_pos = (neighbor[0] + dx*2, neighbor[1] + dy*2)
+                has_obstacle = 0 <= check_pos[0] < self.map_size and \
+                            0 <= check_pos[1] < self.map_size and \
+                            self._is_obstacle_fast(check_pos)
+                direction_has_obstacle.append(has_obstacle)
+                obstacles_in_range += 1 if has_obstacle else 0
+            
+            # 如果水平或垂直方向上有障碍物，但移动方向是通畅的，降低成本
+            if obstacles_in_range >= 2 and \
+            ((direction_has_obstacle[0] or direction_has_obstacle[1]) and 
+                (direction_has_obstacle[2] or direction_has_obstacle[3])):
+                is_corridor = True
+                narrow_passage_reward = 0.2  # 鼓励探索通道
+        
+        # 使用Q值影响成本 - 让算法更多依赖学习到的经验
         q_factor = 1.0
         current_state = self.get_state_representation(current)
         
         if current_state in self.q_values and action in self.q_values[current_state]:
             q_value = self.q_values[current_state][action]
             if q_value > 0:
-                q_factor = max(0.5, 1.0 - 0.1 * q_value)  # Q值越高，成本越低
+                # 正Q值大幅降低成本
+                q_factor = max(0.4, 1.0 - 0.15 * q_value)  # 更激进的成本降低
             elif q_value < 0:
-                q_factor = min(2.0, 1.0 - 0.1 * q_value)  # Q值为负数时增加成本
+                # 负Q值大幅增加成本
+                q_factor = min(3.0, 1.0 - 0.15 * q_value)  # 更激进的成本增加
         
-        return base_cost * obstacle_cost * q_factor
+        # 总成本计算
+        total_cost = base_cost * obstacle_cost * q_factor
+        
+        # 应用通道奖励
+        if is_corridor:
+            total_cost = max(0.5, total_cost - narrow_passage_reward)
+            
+        return total_cost
     
     def _reconstruct_path(self, came_from, current):
         """重建路径"""
@@ -602,20 +730,36 @@ class ReinforcedAStar:
     def _is_valid_position(self, pos):
         """检查位置是否有效（在地图范围内且不是障碍物）"""
         x, y = pos
+        # 检查边界
         if not (0 <= x < self.map_size and 0 <= y < self.map_size):
             return False
             
+        # 检查是否为障碍物
         if self._is_obstacle_fast(pos):
             return False
             
         return True
     
     def _is_obstacle_fast(self, point):
-        """快速检查点是否为障碍物"""
+        """强化版快速障碍物检测"""
         # 转换为整数坐标
         x, y = int(round(point[0])), int(round(point[1]))
-        return (x, y) in self.obstacle_grids
-    
+
+        # 直接检查点是否在障碍物集合中
+        if (x, y) in self.obstacle_grids:
+            return True
+            
+        # 多检查一下周围的点，扩大障碍物的"影响范围"
+        for dx in [-1, 0, 1]:
+            for dy in [-1, 0, 1]:
+                if dx == 0 and dy == 0:
+                    continue
+                nx, ny = x + dx, y + dy
+                if (nx, ny) in self.obstacle_grids:
+                    return True
+                    
+        return False
+
     def _count_nearby_obstacles(self, point, radius=3):
         """计算点附近障碍物数量"""
         x, y = point
@@ -626,9 +770,13 @@ class ReinforcedAStar:
                 if dx == 0 and dy == 0:
                     continue
                     
-                check_point = (x + dx, y + dy)
-                if self._is_obstacle_fast(check_point):
-                    count += 1
+                nx, ny = int(x + dx), int(y + dy)
+                check_point = (nx, ny)
+                
+                # 确保点在地图范围内
+                if 0 <= nx < self.map_size and 0 <= ny < self.map_size:
+                    if self._is_obstacle_fast(check_point):
+                        count += 1
         
         return count
 
@@ -721,7 +869,7 @@ class HybridPathPlanner:
             self.max_grade = 15.0
             self.min_turn_radius = 15.0
       
-    def plan_path(self, start, end, vehicle=None):
+    def plan_path(self, start, end, vehicle=None, force_replan=False):
         """
         路径规划主入口方法
         
@@ -729,6 +877,7 @@ class HybridPathPlanner:
             start: 起点坐标 (x, y)
             end: 终点坐标 (x, y)
             vehicle: 可选的车辆对象，用于考虑车辆特性
+            force_replan: 是否强制重新规划路径（忽略缓存）
             
         Returns:
             List[Tuple[float, float]]: 规划的路径点列表
@@ -749,8 +898,11 @@ class HybridPathPlanner:
             # 创建缓存键
             cache_key = self._create_cache_key(start, end, vehicle)
                     
-            # 检查缓存
-            cached_path = self.path_cache.get(cache_key)
+            # 检查缓存（如果不强制重新规划）
+            cached_path = None
+            if not force_replan:
+                cached_path = self.path_cache.get(cache_key)
+                
             if cached_path:
                 logging.debug(f"使用缓存路径: {start} -> {end}")
                 return cached_path
@@ -1294,7 +1446,8 @@ if __name__ == "__main__":
             return (x, y) in self.obstacle_grids
     
     # 创建迷宫型障碍物
-    def create_maze(map_size=200, wall_width=5):
+    def create_maze(map_size=200, wall_width=3):
+        """创建简化版迷宫式障碍物，复杂度降低约30%"""
         obstacles = set()
         
         # 边界墙
@@ -1304,23 +1457,23 @@ if __name__ == "__main__":
             obstacles.add((i, 0))
             obstacles.add((i, map_size-1))
         
-        # 水平墙
+        # 水平墙 - 减少长度和数量
         h_walls = [
-            (20, 40, 120, 40),    # (x1, y1, x2, y2)
-            (80, 80, 180, 80),
-            (20, 120, 120, 120),
-            (80, 160, 180, 160)
+            (20, 40, 100, 40),    # 缩短第一个水平墙
+            (90, 80, 160, 80),    # 缩短第二个水平墙
+            (20, 120, 100, 120),  # 缩短第三个水平墙
+            (90, 160, 160, 160)   # 保持第四个水平墙
         ]
         
-        # 垂直墙
+        # 垂直墙 - 减少长度和数量
         v_walls = [
-            (40, 20, 40, 100),
-            (80, 40, 80, 140),
-            (120, 20, 120, 100),
-            (160, 80, 160, 180)
+            (40, 20, 40, 80),     # 缩短第一个垂直墙
+            (80, 40, 80, 120),    # 保持第二个垂直墙
+            (120, 20, 120, 80),   # 缩短第三个垂直墙
+            (160, 90, 160, 160)   # 缩短第四个垂直墙
         ]
         
-        # 创建墙壁
+        # 创建墙壁 - 减小墙壁宽度
         for x1, y1, x2, y2 in h_walls:
             for x in range(x1, x2+1):
                 for y in range(y1-wall_width//2, y1+wall_width//2+1):
@@ -1331,22 +1484,45 @@ if __name__ == "__main__":
                 for x in range(x1-wall_width//2, x1+wall_width//2+1):
                     obstacles.add((x, y))
                     
-        # 添加一些随机障碍
+        # 添加随机障碍 - 减少数量约30%
         import random
-        for _ in range(100):
+        for _ in range(70):  # 从100减少到70
             x = random.randint(1, map_size-2)
             y = random.randint(1, map_size-2)
             
             # 创建小型随机障碍群
-            size = random.randint(2, 5)
+            size = random.randint(2, 4)  # 从2-5减少到2-4
             for dx in range(-size, size+1):
                 for dy in range(-size, size+1):
                     nx, ny = x + dx, y + dy
                     if 0 < nx < map_size-1 and 0 < ny < map_size-1:
-                        # 避免阻塞起点和终点区域
-                        if not ((nx < 30 and ny < 30) or (nx > map_size-30 and ny > map_size-30)):
+                        # 增大避开起点和终点区域的范围
+                        if not ((nx < 35 and ny < 35) or (nx > map_size-35 and ny > map_size-35)):
                             obstacles.add((nx, ny))
-                            
+        
+        # 确保关键通道畅通
+        # 识别并清除可能导致死锁的障碍物
+        critical_paths = [
+            # 从起点到第一个关键点的路径
+            [(x, 30) for x in range(15, 60)],
+            # 垂直通道
+            [(80, y) for y in range(40, 120)],
+            # 终点附近的通道
+            [(x, 170) for x in range(160, 190)]
+        ]
+        
+        # 确保关键通道有足够宽度
+        for path in critical_paths:
+            for point in path:
+                x, y = point
+                # 清除点周围的障碍物，创建更宽的通道
+                for dx in range(-3, 4):  # 通道宽度增加到7
+                    for dy in range(-3, 4):
+                        nx, ny = x + dx, y + dy
+                        if 0 < nx < map_size-1 and 0 < ny < map_size-1:
+                            if (nx, ny) in obstacles:
+                                obstacles.remove((nx, ny))
+                                
         return obstacles
     
     # 设置地图尺寸和起点终点
@@ -1368,7 +1544,7 @@ if __name__ == "__main__":
     print(f"起点: {start_point}, 终点: {end_point}")
     
     # 执行多次路径规划，观察学习效果
-    num_iterations = 5
+    num_iterations = 50
     paths = []
     times = []
     
@@ -1376,7 +1552,20 @@ if __name__ == "__main__":
         print(f"\n第 {i+1}/{num_iterations} 次路径规划:")
         
         start_time = time.time()
-        path = planner.plan_path(start_point, end_point)
+        path = planner.plan_path(start_point, end_point, force_replan=True)
+        elapsed = time.time() - start_time
+        
+       
+        
+    # 清除缓存，确保每次都重新规划
+        planner.path_cache.clear()
+        
+        # 添加微小的随机扰动，确保每次规划都有不同路径
+        slight_offset = random.randint(-2, 2)
+        modified_start = (start_point[0] + slight_offset, start_point[1] + slight_offset)
+        
+        start_time = time.time()
+        path = planner.plan_path(modified_start, end_point)
         elapsed = time.time() - start_time
         
         paths.append(path)

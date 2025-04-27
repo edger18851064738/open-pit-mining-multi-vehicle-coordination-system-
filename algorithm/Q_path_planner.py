@@ -153,6 +153,57 @@ class PathCache:
             }
 
 class ReinforcedAStar:
+
+    def _visualize_path(self, path, start, goal):
+        """路径可视化方法"""
+        import matplotlib.pyplot as plt
+        from matplotlib.collections import LineCollection
+        
+        plt.figure(figsize=(12, 8))
+        
+        # 绘制障碍物
+        if self.obstacle_grids:
+            obstacles = np.array(list(self.obstacle_grids))
+            plt.scatter(obstacles[:,0], obstacles[:,1], c='gray', s=5, alpha=0.5, label='障碍物')
+        
+        # 绘制路径
+        segments = np.array([(path[i], path[i+1]) for i in range(len(path)-1)])
+        lc = LineCollection(segments, cmap='viridis', linewidths=2)
+        lc.set_array(np.linspace(0, 1, len(segments)))
+        plt.gca().add_collection(lc)
+        
+        # 标记起点终点
+        plt.scatter(*start, c='green', s=100, marker='o', edgecolors='black', label='起点')
+        plt.scatter(*goal, c='red', s=100, marker='*', edgecolors='black', label='终点')
+        
+        # 设置图形属性
+        plt.title('强化A*路径规划结果')
+        plt.xlabel('X坐标')
+        plt.ylabel('Y坐标')
+        plt.grid(True, alpha=0.3)
+        plt.legend()
+        plt.colorbar(lc, label='路径进度')
+        
+        # 创建保存目录
+        save_dir = os.path.join(PROJECT_ROOT, 'results', 'path_visualization')
+        os.makedirs(save_dir, exist_ok=True)
+        
+        # 生成唯一文件名
+        timestamp = time.strftime("%Y%m%d-%H%M%S")
+        filename = f"path_{timestamp}_s{start[0]}x{start[1]}_g{goal[0]}x{goal[1]}.png"
+        save_path = os.path.join(save_dir, filename)
+        
+        plt.savefig(save_path, bbox_inches='tight', dpi=150)
+        plt.close()
+        
+    def _get_visualization_path(self, start, goal):
+        """获取可视化文件路径"""
+        return os.path.join(
+            PROJECT_ROOT, 
+            'results', 
+            'path_visualization', 
+            f"path_*_s{start[0]}x{start[1]}_g{goal[0]}x{goal[1]}.png"
+        )
     """强化A*算法实现，用于学习最优路径"""
     
     def __init__(self, planner, learning_rate=DEFAULT_LEARNING_RATE, discount_factor=DEFAULT_DISCOUNT_FACTOR):
@@ -162,7 +213,7 @@ class ReinforcedAStar:
         self.q_values = {}  # 存储状态-动作对应的Q值
         self.experience_buffer = []  # 经验回放缓冲区
         self.max_buffer_size = 1000  # 最大缓冲区大小
-        
+        self.collision_history = {}  # 记录碰撞历史
         # 地图相关属性
         self.map_size = getattr(planner, 'map_size', 200)
         self.obstacle_grids = getattr(planner, 'obstacle_grids', set())
@@ -184,7 +235,11 @@ class ReinforcedAStar:
         self.successful_paths = 0
         self.last_path_length = 0
         self.last_training_time = 0
-        
+        self.metrics = {
+            'consecutive_collisions': 0,
+            'total_collisions': 0,
+            'successful_navigations': 0
+        }
     def get_heuristic(self, current, goal):
         """大幅强化版启发式函数"""
         dx, dy = abs(current[0] - goal[0]), abs(current[1] - goal[1])
@@ -287,7 +342,13 @@ class ReinforcedAStar:
             return None
             
         # 随机探索概率 - 随着训练次数增加而减少
-        exploration_prob = max(0.05, 0.3 * math.exp(-0.02 * self.episodes_trained))
+         # 随机探索概率 - 随着训练次数增加而减少，但保留最小值
+        exploration_prob = max(0.05, 0.3 * math.exp(-0.01 * self.episodes_trained))
+        
+        # 如果碰到障碍物太多，临时增加探索概率
+        if self.metrics['consecutive_collisions'] > 3:
+            exploration_prob += 0.2
+            self.metrics['consecutive_collisions'] = 0  # 重置
         
         # 利用阶段 - 基于Q值选择动作
         if state in self.q_values and random.random() > exploration_prob:
@@ -356,21 +417,15 @@ class ReinforcedAStar:
         return random.choice(risky_actions) if risky_actions else random.choice(available_actions)
     
     def update_q_values(self, state, action, reward, next_state, done):
-        """
-        更新Q值表
-        
-        使用Q-learning更新公式: Q(s,a) = Q(s,a) + α[r + γ*max(Q(s',a')) - Q(s,a)]
-        """
-        # 确保状态存在于Q值表中
+        """增强版Q值更新，更重视负面奖励"""
         if state not in self.q_values:
             self.q_values[state] = {}
         
-        # 获取当前Q值
         current_q = self.q_values[state].get(action, 0)
         
         # 计算目标Q值
         if done:
-            target_q = reward  # 终态
+            target_q = reward
         else:
             # 获取下一个状态的最大Q值
             if next_state in self.q_values and self.q_values[next_state]:
@@ -380,16 +435,14 @@ class ReinforcedAStar:
                 
             target_q = reward + self.discount_factor * max_next_q
         
+        # 修改学习率根据奖励情况 - 负面奖励学习更快
+        adaptive_learning_rate = self.learning_rate
+        if reward < 0:  # 负面奖励时提高学习率
+            adaptive_learning_rate = min(0.5, self.learning_rate * 2.0)
+        
         # 更新Q值
-        new_q = current_q + self.learning_rate * (target_q - current_q)
+        new_q = current_q + adaptive_learning_rate * (target_q - current_q)
         self.q_values[state][action] = new_q
-        
-        # 将经验添加到缓冲区
-        self.experience_buffer.append((state, action, reward, next_state, done))
-        
-        # 限制缓冲区大小
-        if len(self.experience_buffer) > self.max_buffer_size:
-            self.experience_buffer.pop(0)
     
     def replay_experiences(self, batch_size=32):
         """从经验缓冲区中随机采样并更新Q值，以提高学习效率"""
@@ -418,10 +471,73 @@ class ReinforcedAStar:
             
             new_q = current_q + self.learning_rate * (target_q - current_q)
             self.q_values[state][action] = new_q
-    
+    def _check_direct_path(self, start, goal):
+        """检查起点和终点之间是否有直接路径"""
+        # 使用Bresenham算法检查直线路径上是否有障碍物
+        points = self._get_line_points(start, goal)
+        
+        # 检查线上所有点是否无障碍
+        for point in points:
+            if self._is_obstacle_fast(point):
+                return None  # 有障碍物，返回None
+        
+        # 如果直线路径无障碍，直接返回
+        return [start, goal]
+    def _get_line_points(self, start, end):
+        """使用Bresenham算法获取线段上的所有点"""
+        points = []
+        x1, y1 = int(round(start[0])), int(round(start[1]))
+        x2, y2 = int(round(end[0])), int(round(end[1]))
+        
+        dx = abs(x2 - x1)
+        dy = abs(y2 - y1)
+        
+        sx = 1 if x1 < x2 else -1
+        sy = 1 if y1 < y2 else -1
+        
+        err = dx - dy
+        
+        while True:
+            points.append((x1, y1))
+            if x1 == x2 and y1 == y2:
+                break
+            
+            e2 = 2 * err
+            if e2 > -dy:
+                err -= dy
+                x1 += sx
+            if e2 < dx:
+                err += dx
+                y1 += sy
+        
+        return points
+
+    def _check_segment_safe(self, p1, p2):
+        """检查线段是否安全(无障碍物)"""
+        # 使用Bresenham算法检查
+        points = self._get_line_points(p1, p2)
+        
+        # 点周围安全区域检查
+        safe_radius = 2
+        
+        for point in points:
+            # 检查点本身
+            if self._is_obstacle_fast(point):
+                return False
+            
+            # 周围检查 - 确保路径有一定宽度
+            for dx in range(-safe_radius, safe_radius+1):
+                for dy in range(-safe_radius, safe_radius+1):
+                    check_point = (point[0] + dx, point[1] + dy)
+                    if self._is_obstacle_fast(check_point):
+                        # 太靠近障碍物
+                        if dx*dx + dy*dy <= safe_radius:  # 只在半径内检查
+                            return False
+        
+        return True
     def pathfind(self, start, goal, max_iterations=MAX_ITERATIONS):
         """
-        使用强化A*算法进行路径规划
+        使用强化A*算法进行路径规划 - 全面优化版
         
         Args:
             start: 起点坐标
@@ -431,11 +547,32 @@ class ReinforcedAStar:
         Returns:
             List[Tuple[float, float]]: 找到的路径
         """
-        logging.debug(f"开始路径规划: 从 {start} 到 {goal}")
-        logging.debug(f"障碍物数量: {len(self.obstacle_grids)}")
+        logging.info(f"开始强化A*路径规划: 从 {start} 到 {goal}")
+        logging.info(f"障碍物数量: {len(self.obstacle_grids)}")
         
         episode_start_time = time.time()
         
+        # 先检查起点和终点是否直接连通(无障碍物)
+        direct_path = self._check_direct_path(start, goal)
+        if direct_path:
+            logging.info(f"发现直接路径，跳过A*搜索")
+            return direct_path
+        
+        # 验证起点和终点不在障碍物上
+        if self._is_obstacle_fast(start):
+            logging.warning(f"起点位于障碍物上，尝试寻找附近安全点")
+            start = self._find_safe_point_near(start)
+            if not start:
+                logging.error("无法找到安全的起点")
+                return None
+                
+        if self._is_obstacle_fast(goal):
+            logging.warning(f"终点位于障碍物上，尝试寻找附近安全点")
+            goal = self._find_safe_point_near(goal)
+            if not goal:
+                logging.error("无法找到安全的终点")
+                return None
+            
         # 初始化开放集和闭合集
         open_set = []
         open_set_hash = set()
@@ -458,6 +595,9 @@ class ReinforcedAStar:
         path_states = []
         path_actions = []
         
+        # 重置本次搜索的连续碰撞计数
+        self.metrics['consecutive_collisions'] = 0
+        
         # 主循环
         iterations = 0
         while open_set and iterations < max_iterations:
@@ -473,7 +613,7 @@ class ReinforcedAStar:
             
             # 周期性调试输出
             if iterations % 1000 == 0:
-                logging.debug(f"A*迭代: {iterations}, 位置: {current}, 距离终点: {math.dist(current, goal)}")
+                logging.info(f"A*迭代: {iterations}, 位置: {current}, 距离终点: {math.dist(current, goal)}")
             
             # 检查是否到达目标
             if self._close_enough(current, goal):
@@ -488,11 +628,21 @@ class ReinforcedAStar:
                 self.successful_paths += 1
                 self.last_path_length = len(path)
                 self.last_training_time = time.time() - episode_start_time
+                self.metrics['successful_navigations'] += 1
                 
                 # 学习过程 - 为路径上的每个状态-动作对更新Q值
                 self._learn_from_path(path_states, path_actions, path)
                 
-                logging.info(f"路径规划成功! 迭代次数: {iterations}, 路径长度: {len(path)}")
+                logging.info(f"路径规划成功! 迭代次数: {iterations}, 路径长度: {len(path)}, 总奖励: {total_reward:.2f}")
+                
+                # 路径优化 - 平滑和简化
+                if len(path) > 3:
+                    try:
+                        path = self._post_process_path(path)
+                        logging.info(f"路径优化完成, 最终路径长度: {len(path)}")
+                    except Exception as e:
+                        logging.warning(f"路径优化失败: {str(e)}")
+                
                 return path
             
             # 添加到闭合集
@@ -518,6 +668,16 @@ class ReinforcedAStar:
                         self._is_obstacle_fast((current[0] + dx, current[1]))):
                         continue
                 
+                # 检查是否是障碍物，若是则更新碰撞统计
+                if self._is_obstacle_fast(new_pos):
+                    self.metrics['consecutive_collisions'] += 1
+                    self.metrics['total_collisions'] += 1
+                    continue
+                else:
+                    # 如果不是障碍物且是新位置，重置连续碰撞计数
+                    if new_pos not in closed_set and new_pos not in open_set_hash:
+                        self.metrics['consecutive_collisions'] = 0
+                
                 available_actions.append(action)
             
             # 使用学习的策略选择最佳动作
@@ -542,11 +702,15 @@ class ReinforcedAStar:
                     # 计算新的g值
                     tentative_g = g_score[current] + adjusted_cost
                     
-                    # 检查是否找到更好的路径
+                    # 检查是否找到更好的路径或新节点
                     if neighbor not in g_score or tentative_g < g_score[neighbor]:
                         came_from[neighbor] = current
                         g_score[neighbor] = tentative_g
-                        f_score[neighbor] = tentative_g + self.get_heuristic(neighbor, goal)
+                        
+                        # 计算启发式值 + 学习调整
+                        h_value = self.get_heuristic(neighbor, goal)
+                        learned_adjustment = self.get_learned_adjustment(neighbor, goal)
+                        f_score[neighbor] = tentative_g + h_value + learned_adjustment
                         
                         # 计算即时奖励
                         reward = self._calculate_reward(current, neighbor, goal)
@@ -557,14 +721,25 @@ class ReinforcedAStar:
                         done = self._close_enough(neighbor, goal)
                         self.update_q_values(current_state, best_action, reward, next_state, done)
                         
+                        # 将经验添加到回放缓冲区
+                        if len(self.experience_buffer) >= self.max_buffer_size:
+                            self.experience_buffer.pop(0)  # 移除最旧的经验
+                        self.experience_buffer.append((current_state, best_action, reward, next_state, done))
+                        
                         # 如果节点不在开放集中，添加它
                         if neighbor not in open_set_hash:
                             heapq.heappush(open_set, (f_score[neighbor], g_score[neighbor], neighbor))
                             open_set_hash.add(neighbor)
             
+            # 定期从经验回放中学习，加速收敛
+            if iterations % 100 == 0 and len(self.experience_buffer) > 32:
+                self.replay_experiences()
+        
         # 如果没有找到路径，尝试学习失败原因
         if iterations >= max_iterations:
             logging.warning(f"强化A*搜索达到最大迭代次数 ({max_iterations})，搜索失败")
+            if self.metrics['consecutive_collisions'] > 5:
+                logging.warning(f"搜索可能卡在障碍物中，连续碰撞次数: {self.metrics['consecutive_collisions']}")
         else:
             logging.warning("强化A*搜索失败，开放集为空")
         
@@ -574,11 +749,245 @@ class ReinforcedAStar:
         # 更新统计
         self.episodes_trained += 1
         
+        # 如果总奖励极低，调整学习参数
+        if total_reward < -1000:
+            self.learning_rate = min(0.5, self.learning_rate * 1.1)  # 稍微增加学习率
+            logging.debug(f"总奖励过低({total_reward:.2f})，调整学习率至: {self.learning_rate:.3f}")
+        
         # 从经验回放中学习
         self.replay_experiences()
         
+        logging.debug(f"本次搜索总奖励: {total_reward:.2f}, 迭代次数: {iterations}")
+        
+        # 尝试使用备用算法
+        backup_path = self._find_backup_path(start, goal)
+        if backup_path:
+            logging.info(f"A*搜索失败，使用备用算法找到路径，长度: {len(backup_path)}")
+            return backup_path
+        
         return None
-    
+
+    def _find_safe_point_near(self, point, max_radius=10):
+        """查找点附近的安全点(非障碍物)"""
+        x, y = point
+        
+        # 检查扩大的范围
+        for radius in range(1, max_radius + 1):
+            # 先检查周围一圈
+            candidates = []
+            
+            # 检查圆周上的点
+            num_points = max(8, int(radius * 8))  # 确保有足够的点
+            for i in range(num_points):
+                angle = 2 * math.pi * i / num_points
+                nx = x + radius * math.cos(angle)
+                ny = y + radius * math.sin(angle)
+                
+                # 确保在地图内
+                if 0 <= nx < self.map_size and 0 <= ny < self.map_size:
+                    if not self._is_obstacle_fast((nx, ny)):
+                        candidates.append((nx, ny))
+            
+            if candidates:
+                # 找到安全点，返回距离原点最近的
+                return min(candidates, key=lambda p: (p[0]-x)**2 + (p[1]-y)**2)
+        
+        return None  # 找不到安全点
+
+    def _post_process_path(self, path):
+        """路径后处理 - 平滑和简化"""
+        # 第一步: 去除冗余点
+        if len(path) <= 2:
+            return path
+        
+        # 使用Douglas-Peucker算法简化路径
+        simplified = self._simplify_path(path, tolerance=2.0)
+        
+        # 第二步: 确保简化后的路径安全
+        safe_path = [simplified[0]]
+        
+        for i in range(1, len(simplified)):
+            prev = safe_path[-1]
+            curr = simplified[i]
+            
+            # 检查线段安全性
+            if self._check_segment_safe(prev, curr):
+                safe_path.append(curr)
+            else:
+                # 线段不安全，添加原始路径中的中间点
+                try:
+                    orig_idx_prev = path.index(prev)
+                    orig_idx_curr = path.index(curr)
+                    
+                    # 添加原始路径中的点以确保安全
+                    for j in range(orig_idx_prev + 1, orig_idx_curr + 1):
+                        if j < len(path):
+                            safe_path.append(path[j])
+                except ValueError:
+                    # 处理找不到索引的情况
+                    safe_path.append(curr)
+        
+        return safe_path
+
+    def _simplify_path(self, points, tolerance=1.0):
+        """Douglas-Peucker算法简化路径"""
+        if len(points) <= 2:
+            return points
+        
+        # 找到偏差最大的点
+        max_distance = 0
+        index = 0
+        end = len(points) - 1
+        
+        # 计算每个点到首尾连线的距离
+        for i in range(1, end):
+            distance = self._perpendicular_distance(points[i], points[0], points[end])
+            if distance > max_distance:
+                max_distance = distance
+                index = i
+        
+        # 如果最大距离大于容差，递归简化
+        if max_distance > tolerance:
+            # 递归简化两部分
+            first_part = self._simplify_path(points[:index+1], tolerance)
+            second_part = self._simplify_path(points[index:], tolerance)
+            
+            # 合并结果，避免重复中间点
+            return first_part[:-1] + second_part
+        else:
+            # 距离足够小，返回首尾两点
+            return [points[0], points[end]]
+
+    def _perpendicular_distance(self, point, line_start, line_end):
+        """计算点到线段的垂直距离"""
+        if line_start == line_end:
+            return math.dist(point, line_start)
+        
+        x, y = point
+        x1, y1 = line_start
+        x2, y2 = line_end
+        
+        # 线性代数计算点到直线距离
+        num = abs((y2-y1)*x - (x2-x1)*y + x2*y1 - y2*x1)
+        den = math.sqrt((y2-y1)**2 + (x2-x1)**2)
+        
+        if den == 0:
+            return 0
+            
+        return num / den
+    def _find_backup_path(self, start, goal):
+        """
+        备用路径寻找算法 - 基于BFS的简单探索
+        
+        当A*失败时用这个简单但健壮的算法尝试寻找路径
+        """
+        # 尝试使用直线分段法
+        safe_segments = []
+        
+        # 尝试几种不同的中间点方案
+        dx = goal[0] - start[0]
+        dy = goal[1] - start[1]
+        
+        # 计算直线距离
+        direct_distance = math.sqrt(dx*dx + dy*dy)
+        
+        # 生成一组候选中间点
+        mid_points = []
+        
+        # 直接中点
+        direct_mid = (start[0] + dx/2, start[1] + dy/2)
+        if not self._is_obstacle_fast(direct_mid):
+            mid_points.append(direct_mid)
+        
+        # 围绕中心点的偏移
+        for offset_pct in [0.2, 0.3, 0.4]:
+            for angle in [30, 60, 120, 150, 210, 240, 300, 330]:
+                angle_rad = math.radians(angle)
+                offset_dist = direct_distance * offset_pct
+                offset_x = math.cos(angle_rad) * offset_dist
+                offset_y = math.sin(angle_rad) * offset_dist
+                
+                mid = (direct_mid[0] + offset_x, direct_mid[1] + offset_y)
+                
+                # 确保坐标在地图范围内
+                if 0 <= mid[0] < self.map_size and 0 <= mid[1] < self.map_size:
+                    if not self._is_obstacle_fast(mid):
+                        mid_points.append(mid)
+        
+        # 若有中间点，尝试连接
+        for mid in mid_points:
+            # 检查起点到中点路径
+            if self._check_segment_safe(start, mid):
+                # 检查中点到终点路径
+                if self._check_segment_safe(mid, goal):
+                    logging.info(f"备用算法找到路径: {start} -> {mid} -> {goal}")
+                    return [start, mid, goal]
+        
+        # 如果简单中间点不行，尝试网格BFS搜索
+        try:
+            # 简化为网格坐标
+            grid_size = 10
+            grid_start = (int(start[0] // grid_size), int(start[1] // grid_size))
+            grid_goal = (int(goal[0] // grid_size), int(goal[1] // grid_size))
+            
+            # 使用BFS搜索
+            from collections import deque
+            queue = deque([grid_start])
+            visited = {grid_start: None}  # 记录来源点，用于路径重建
+            
+            # 方向: 上下左右 + 对角线
+            directions = [(0,1), (1,0), (0,-1), (-1,0), (1,1), (1,-1), (-1,1), (-1,-1)]
+            
+            while queue:
+                current = queue.popleft()
+                
+                # 检查是否到达目标
+                if current == grid_goal:
+                    # 重建路径
+                    path = []
+                    while current:
+                        # 转回原始坐标系
+                        real_point = (current[0] * grid_size, current[1] * grid_size)
+                        path.append(real_point)
+                        current = visited[current]
+                        
+                    # 路径从目标点到起点，需要翻转
+                    path.reverse()
+                    
+                    # 确保起点和终点正确
+                    if path[0] != start:
+                        path[0] = start
+                    if path[-1] != goal:
+                        path.append(goal)
+                    
+                    logging.info(f"BFS备用算法找到路径，长度: {len(path)}")
+                    return path
+                
+                # 尝试所有方向
+                for dx, dy in directions:
+                    next_pos = (current[0] + dx, current[1] + dy)
+                    
+                    # 检查是否在地图范围内
+                    if not (0 <= next_pos[0] < self.map_size//grid_size and 
+                            0 <= next_pos[1] < self.map_size//grid_size):
+                        continue
+                    
+                    # 检查是否已访问
+                    if next_pos in visited:
+                        continue
+                    
+                    # 检查是否是障碍物
+                    real_pos = (next_pos[0] * grid_size, next_pos[1] * grid_size)
+                    if self._is_obstacle_fast(real_pos):
+                        continue
+                    
+                    # 将下一个位置加入队列
+                    queue.append(next_pos)
+                    visited[next_pos] = current
+        except Exception as e:
+            logging.error(f"BFS备用算法失败: {str(e)}")
+        
+        return None    
     def _learn_from_path(self, states, actions, path):
         """从成功的路径中学习"""
         self.episodes_trained += 1
@@ -628,7 +1037,7 @@ class ReinforcedAStar:
             self.q_values[state][action] = current_q - self.learning_rate * 10
     
     def _calculate_reward(self, current, next_pos, goal):
-        """大幅增强版奖励函数"""
+        """大幅增强版奖励函数 - 极度提高避障奖励"""
         # 基础奖励
         reward = 1.0
         
@@ -638,20 +1047,77 @@ class ReinforcedAStar:
         progress_reward = current_dist - next_dist
         reward += progress_reward * 5.0  # 大幅增加目标吸引力
         
-        # 严重惩罚接近障碍物
-        obstacles_nearby = self._count_nearby_obstacles(next_pos, radius=2)
-        obstacle_penalty = -2.0 * obstacles_nearby  # 大幅增加障碍物惩罚
-        reward += obstacle_penalty
+        # 检查障碍物
+        obstacles_nearby = self._count_nearby_obstacles(next_pos, radius=8)  # 增加检测半径
         
-        # 奖励通道中的移动
+        # 使用指数惩罚函数 - 几何级增加惩罚强度
+        if obstacles_nearby > 0:
+            # 障碍物数量的平方作为惩罚值，大幅增加惩罚系数
+            obstacle_penalty = -10.0 * (obstacles_nearby ** 2)
+            reward += obstacle_penalty
+        else:
+            # 无障碍物时给予额外奖励
+            reward += 30.0
+        
+        # 直接碰撞障碍物的严厉惩罚
+        if self._is_obstacle_fast(next_pos):
+            reward -= 200.0  # 从-50增加到-200，使碰撞几乎不可能被选择
+        
+        # 检查是否在障碍物形成的狭窄通道中
         if self._is_in_corridor(next_pos):
-            reward += 2.0  # 奖励在通道中的移动
+            reward += 5.0  # 提高通道奖励
         
         # 到达目标的奖励
         if self._close_enough(next_pos, goal):
-            reward += 200.0  # 大幅增加目标奖励
-            
+            reward += 200.0
+        
+        # 重复访问同一位置的额外惩罚
+        collision_key = (int(next_pos[0]), int(next_pos[1]))
+        if collision_key in self.collision_history:
+            reward -= 20.0 * self.collision_history[collision_key]  # 从10增加到20
+
+        # 在遇到障碍物时更新历史
+        if self._is_obstacle_fast(next_pos):
+            if collision_key in self.collision_history:
+                self.collision_history[collision_key] += 1
+            else:
+                self.collision_history[collision_key] = 1
+                
+        # 检查前方路径是否有障碍物墙壁
+        ahead_obstacles = self._check_ahead_obstacles(next_pos, goal)
+        if ahead_obstacles > 2:  # 如果前方有障碍物墙
+            reward -= 50.0  # 大幅惩罚朝向障碍物墙移动
+                
         return reward
+    def _check_ahead_obstacles(self, position, goal):
+        """检查当前位置到目标之间是否有障碍物墙"""
+        # 获取方向向量
+        dx = goal[0] - position[0]
+        dy = goal[1] - position[1]
+        distance = math.sqrt(dx*dx + dy*dy)
+        
+        if distance < 0.001:  # 避免除零
+            return 0
+        
+        # 归一化方向向量
+        dx, dy = dx/distance, dy/distance
+        
+        # 检查前方8个单位距离内的点
+        check_distance = min(8, distance)
+        obstacle_count = 0
+        
+        for i in range(1, int(check_distance) + 1):
+            check_x = int(position[0] + dx * i)
+            check_y = int(position[1] + dy * i)
+            
+            # 检查点及其周围
+            for cdx in range(-1, 2):
+                for cdy in range(-1, 2):
+                    cx, cy = check_x + cdx, check_y + cdy
+                    if (cx, cy) in self.obstacle_grids:
+                        obstacle_count += 1
+        
+        return obstacle_count
     
     def _calculate_adjusted_cost(self, current, neighbor, action):
         """改进的成本计算 - 对障碍物更敏感"""
@@ -661,7 +1127,13 @@ class ReinforcedAStar:
         # 障碍物接近度成本 - 加强避障反应
         obstacles_nearby = self._count_nearby_obstacles(neighbor, radius=3)
         # 使用指数函数增加障碍物对成本的影响
-        obstacle_cost = 1.0 + 0.3 * obstacles_nearby**1.5
+        obstacle_cost = 1.0 + 0.5 * obstacles_nearby**2  # 从1.5改为2，更强调障碍物影响
+        
+        # 直接相邻障碍物的影响 - 新增
+        direct_neighbors = self._count_nearby_obstacles(neighbor, radius=1)
+        if direct_neighbors > 0:
+            obstacle_cost *= 3.0  # 直接相邻障碍物大幅增加成本
+    
         
         # 检查是否在通道中 - 减少在障碍物之间的狭窄通道中的移动成本
         is_corridor = False
@@ -750,14 +1222,16 @@ class ReinforcedAStar:
             return True
             
         # 多检查一下周围的点，扩大障碍物的"影响范围"
-        for dx in [-1, 0, 1]:
-            for dy in [-1, 0, 1]:
+        for dx in range(-2, 3):  # 从(-1,2)扩大到(-2,3)
+            for dy in range(-2, 3):
                 if dx == 0 and dy == 0:
                     continue
                 nx, ny = x + dx, y + dy
                 if (nx, ny) in self.obstacle_grids:
-                    return True
-                    
+                    # 使用距离加权 - 越近的障碍物影响越大
+                    distance = math.sqrt(dx*dx + dy*dy)
+                    if distance < 1.5:  # 非常近的障碍物
+                        return True
         return False
 
     def _count_nearby_obstacles(self, point, radius=3):
@@ -1544,7 +2018,7 @@ if __name__ == "__main__":
     print(f"起点: {start_point}, 终点: {end_point}")
     
     # 执行多次路径规划，观察学习效果
-    num_iterations = 50
+    num_iterations = 200
     paths = []
     times = []
     
@@ -1634,3 +2108,87 @@ if __name__ == "__main__":
     
     print("\n测试完成！")
     print(f"最终性能统计: {planner.get_performance_stats()}")
+    # 在测试结束后添加
+# 在测试结束后添加
+# 寻找效果最好的路径（最大累积奖励的路径）
+best_path_index = None
+max_path_reward = float('-inf')
+
+for i, path in enumerate(paths):
+    if path:
+        # 计算路径的累积奖励
+        # 基于路径的进展、平滑度、避障成功率等因素
+        path_reward = 0.0
+        
+        # 计算实际路径长度（欧几里得距离总和）
+        path_distance = sum(math.dist(path[j], path[j+1]) for j in range(len(path)-1))
+        
+        # 路径越短奖励越高（基础奖励）
+        base_reward = map_size * 2 - path_distance  # 将距离转换为奖励
+        path_reward += base_reward
+        
+        # 路径平滑度奖励 - 检查路径转向的平滑程度
+        smoothness_reward = 0.0
+        if len(path) > 2:
+            for j in range(1, len(path) - 1):
+                # 计算前后两段路径的方向向量
+                prev_vec = (path[j][0] - path[j-1][0], path[j][1] - path[j-1][1])
+                next_vec = (path[j+1][0] - path[j][0], path[j+1][1] - path[j][1])
+                
+                # 计算两向量的点积，评估转弯的平滑度
+                dot_product = prev_vec[0] * next_vec[0] + prev_vec[1] * next_vec[1]
+                prev_mag = math.sqrt(prev_vec[0]**2 + prev_vec[1]**2)
+                next_mag = math.sqrt(next_vec[0]**2 + next_vec[1]**2)
+                
+                if prev_mag > 0 and next_mag > 0:
+                    cos_angle = dot_product / (prev_mag * next_mag)
+                    # 转弯越平滑，cos值越接近1，奖励越高
+                    smoothness_reward += (cos_angle + 1) * 10  # 范围从0到20
+        
+        path_reward += smoothness_reward
+        
+        # 避障成功奖励 - 基于路径点与障碍物的平均距离
+        obstacle_avoidance_reward = 0.0
+        for point in path:
+            obstacles_nearby = planner._count_nearby_obstacles(point, radius=5)
+            # 附近障碍物越少，奖励越高
+            obstacle_avoidance_reward += max(0, 20 - obstacles_nearby * 2)
+        
+        obstacle_avoidance_reward = obstacle_avoidance_reward / len(path)
+        path_reward += obstacle_avoidance_reward
+        
+        # 更新最大奖励路径
+        if path_reward > max_path_reward:
+            max_path_reward = path_reward
+            best_path_index = i
+
+if best_path_index is not None:
+    # 绘制最佳路径图
+    plt.figure(figsize=(10, 10))
+    
+    # 绘制障碍物
+    obstacle_x = [p[0] for p in planner.obstacle_grids]
+    obstacle_y = [p[1] for p in planner.obstacle_grids]
+    plt.scatter(obstacle_x, obstacle_y, c='gray', marker='s', s=10, alpha=0.6, label='障碍物')
+    
+    # 绘制起点和终点
+    plt.scatter(start_point[0], start_point[1], c='green', marker='o', s=150, label='起点')
+    plt.scatter(end_point[0], end_point[1], c='red', marker='o', s=150, label='终点')
+    
+    # 绘制最佳路径
+    best_path = paths[best_path_index]
+    x_coords = [p[0] for p in best_path]
+    y_coords = [p[1] for p in best_path]
+    plt.plot(x_coords, y_coords, c='blue', linewidth=3, 
+             label=f'最佳路径 (奖励值: {max_path_reward:.1f}, 点数: {len(best_path)})')
+    
+    plt.title("强化A* - 迷宫场景最佳路径")
+    plt.xlabel("X坐标")
+    plt.ylabel("Y坐标")
+    plt.legend(loc='upper left')
+    plt.grid(True, alpha=0.3)
+    plt.tight_layout()
+    plt.show()
+    print(f"\n显示最佳路径 (迭代 {best_path_index+1}，累积奖励: {max_path_reward:.1f})")
+else:
+    print("没有找到有效路径")

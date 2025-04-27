@@ -7,32 +7,39 @@ import math
 matplotlib.rcParams['font.sans-serif'] = ['SimHei', 'DejaVu Sans', 'Arial Unicode MS', 'sans-serif']  # 优先使用的中文字体
 matplotlib.rcParams['axes.unicode_minus'] = False 
 # 使用实际数据（从日志中提取的）
-# 1007号车辆的路径数据
-truck_1007_start = (-13.18, 22.20)
-truck_1007_end = (41.19, -48.60)
-# 采样点数据
-truck_1007_samples = [
-    (0, -13.18, 22.20),
-    (20, -1.43, 6.02),
-    (40, 12.77, -5.89),
-    (60, 32.20, -8.22),
-    (80, 45.92, -22.48),
-    (None, 46.03, -41.40)  # 最后一个点没有索引
+# 1011号车辆数据
+truck_1011_samples = [
+    (0, 58.86, -15.81),
+    (20, 43.82, -28.01),
+    (40, 25.47, -23.62),
+    (60, 18.92, -4.97),
+    (80, 9.81, 12.32),
+    (None, 1.90, 22.64)
 ]
 
-# 1006号车辆的路径数据
-truck_1006_start = (-13.18, 22.19)
-truck_1006_end = (60.21, -13.63)
-# 采样点数据
-truck_1006_samples = [
-    (0, -13.18, 22.19),
-    (20, -1.43, 6.02),
-    (40, 12.78, -5.89),
-    (60, 32.21, -8.17),
-    (80, 42.16, -24.25),
-    (None, 34.52, -42.22),
-    (120, 46.11, -29.20),
-    (140, 59.50, -14.34)
+# 1010号车辆数据
+truck_1010_samples = [
+    (0, 65.26, -22.74),
+    (20, 49.73, -34.79),
+    (40, 31.16, -29.80),
+    (60, 20.61, -13.29),
+    (80, 14.27, 5.62),
+    (None, 2.50, 21.85)
+]
+
+# truck_1026号车辆数据
+truck_1026_samples = [
+    (0, 32.07, -62.33),
+    (20, 21.60, -45.69),
+    (40, 20.46, -26.71),
+    (60, 18.98, -6.78),
+    (80, 10.97, 10.70),
+    (None, -1.10, 26.64),
+    (120, -13.02, 42.70),
+    (140, -24.94, 58.76),
+    (160, -36.95, 74.76),
+    (180, -48.97, 90.74),
+    (200, -61.00, 106.72)
 ]
 
 # 根据采样点生成完整路径数据
@@ -74,9 +81,9 @@ def generate_path_from_samples(samples, total_points):
     
     return path
 
-# 生成完整路径
-truck_1007_points = generate_path_from_samples(truck_1007_samples, 110)
-truck_1006_points = generate_path_from_samples(truck_1006_samples, 142)
+truck_1011_points = generate_path_from_samples(truck_1011_samples, 94)
+truck_1010_points = generate_path_from_samples(truck_1010_samples, 102)
+truck_1026_points = generate_path_from_samples(truck_1026_samples, 201)
 
 # 车辆尺寸参数
 truck_length = 12.0  # 矿卡通常较大
@@ -86,157 +93,43 @@ safe_margin = 1.0
 # 创建图形
 fig, ax = plt.subplots(figsize=(14, 10))
 
-# 绘制两辆车的路径
-ax.plot([p[0] for p in truck_1007_points], [p[1] for p in truck_1007_points], 'g-', label='1007号车(passing车辆)')
-ax.plot([p[0] for p in truck_1006_points], [p[1] for p in truck_1006_points], 'b-', label='1006号车(降级车辆)')
+# 绘制三辆车的路径
+ax.plot([p[0] for p in truck_1011_points], [p[1] for p in truck_1011_points], 'r-', label='1011号车')
+ax.plot([p[0] for p in truck_1010_points], [p[1] for p in truck_1010_points], 'g-', label='1010号车')
+ax.plot([p[0] for p in truck_1026_points], [p[1] for p in truck_1026_points], 'b-', label='truck_1026')
 
-# 标记路径起点和终点
-ax.plot(truck_1007_start[0], truck_1007_start[1], 'go', markersize=8)
-ax.text(truck_1007_start[0]+1, truck_1007_start[1]+1, '1007起点', fontsize=10)
-ax.plot(truck_1007_end[0], truck_1007_end[1], 'g*', markersize=10)
-ax.text(truck_1007_end[0]+1, truck_1007_end[1]+1, '1007终点', fontsize=10)
+# 标记起点和终点
+def plot_start_end(points, color, label):
+    ax.plot(points[0][0], points[0][1], f'{color}o', markersize=8)
+    ax.text(points[0][0]+1, points[0][1]+1, f'{label}起点', fontsize=10)
+    ax.plot(points[-1][0], points[-1][1], f'{color}*', markersize=10)
+    ax.text(points[-1][0]+1, points[-1][1]+1, f'{label}终点', fontsize=10)
 
-ax.plot(truck_1006_start[0], truck_1006_start[1], 'bo', markersize=8)
-ax.text(truck_1006_start[0]-10, truck_1006_start[1]+1, '1006起点', fontsize=10)
-ax.plot(truck_1006_end[0], truck_1006_end[1], 'b*', markersize=10)
-ax.text(truck_1006_end[0]+1, truck_1006_end[1]+1, '1006终点', fontsize=10)
-
-# 绘制采样点
-for _, x, y in truck_1007_samples:
-    ax.plot(x, y, 'gx', markersize=8)
-for _, x, y in truck_1006_samples:
-    ax.plot(x, y, 'bx', markersize=8)
-
-ax.plot([], [], 'gx', markersize=8, label='1007采样点')
-ax.plot([], [], 'bx', markersize=8, label='1006采样点')
-
-# 找出最可能的冲突点
-def distance(p1, p2):
-    return math.sqrt((p1[0]-p2[0])**2 + (p1[1]-p2[1])**2)
-
-min_dist = float('inf')
-conflict_point_1007 = None
-conflict_point_1006 = None
-conflict_idx_1007 = -1
-conflict_idx_1006 = -1
-
-for i, p1 in enumerate(truck_1007_points):
-    for j, p2 in enumerate(truck_1006_points):
-        dist = distance(p1, p2)
-        if dist < min_dist:
-            min_dist = dist
-            conflict_point_1007 = p1
-            conflict_point_1006 = p2
-            conflict_idx_1007 = i
-            conflict_idx_1006 = j
-
-# 检查冲突点是否被步长跳过
-is_detected = False
-sample_indices_1007 = [idx for idx, _, _ in truck_1007_samples if idx is not None]
-for idx in sample_indices_1007:
-    if abs(idx - conflict_idx_1007) < 5:  # 允许一定容差
-        is_detected = True
-        break
-
-# 绘制最可能的冲突点及矩形框
-if conflict_point_1007 and conflict_point_1006:
-    ax.plot(conflict_point_1007[0], conflict_point_1007[1], 'mx', markersize=12)
-    ax.plot(conflict_point_1006[0], conflict_point_1006[1], 'mx', markersize=12)
-    ax.plot([conflict_point_1007[0], conflict_point_1006[0]], 
-            [conflict_point_1007[1], conflict_point_1006[1]], 'm--', linewidth=2)
-    
-    # 计算车辆航向角
-    def calculate_heading(points, idx):
-        if idx < len(points) - 1:
-            dx = points[idx+1][0] - points[idx][0]
-            dy = points[idx+1][1] - points[idx][1]
-        else:
-            dx = points[idx][0] - points[idx-1][0]
-            dy = points[idx][1] - points[idx-1][1]
-        return math.degrees(math.atan2(dy, dx))
-    
-    angle_1007 = calculate_heading(truck_1007_points, conflict_idx_1007)
-    angle_1006 = calculate_heading(truck_1006_points, conflict_idx_1006)
-    
-    # 绘制车辆矩形框
-    def draw_truck_rectangle(point, angle, color):
-        cos_angle = math.cos(math.radians(angle))
-        sin_angle = math.sin(math.radians(angle))
-        
-        # 生成矩形四个角点
-        corners = []
-        for dx, dy in [(-truck_length/2, -truck_width/2), 
-                       (truck_length/2, -truck_width/2),
-                       (truck_length/2, truck_width/2),
-                       (-truck_length/2, truck_width/2)]:
-            # 旋转角点并加上安全边界
-            x_rot = dx * cos_angle - dy * sin_angle
-            y_rot = dx * sin_angle + dy * cos_angle
-            corners.append((point[0] + x_rot, point[1] + y_rot))
-        
-        # 绘制矩形
-        polygon = Polygon(corners, fill=False, edgecolor=color, alpha=0.7, linewidth=2)
-        ax.add_patch(polygon)
-        
-        # 绘制带安全边界的矩形
-        safety_corners = []
-        safe_length = truck_length + 2 * safe_margin
-        safe_width = truck_width + 2 * safe_margin
-        for dx, dy in [(-safe_length/2, -safe_width/2), 
-                      (safe_length/2, -safe_width/2),
-                      (safe_length/2, safe_width/2),
-                      (-safe_length/2, safe_width/2)]:
-            # 旋转角点
-            x_rot = dx * cos_angle - dy * sin_angle
-            y_rot = dx * sin_angle + dy * cos_angle
-            safety_corners.append((point[0] + x_rot, point[1] + y_rot))
-        
-        # 绘制安全边界
-        polygon = Polygon(safety_corners, fill=False, edgecolor=color, alpha=0.4, linewidth=1, linestyle='--')
-        ax.add_patch(polygon)
-    
-    # 绘制车辆矩形
-    draw_truck_rectangle(conflict_point_1007, angle_1007, 'g')
-    draw_truck_rectangle(conflict_point_1006, angle_1006, 'b')
-    
-    # 标记最小距离和冲突点信息
-    ax.text((conflict_point_1007[0] + conflict_point_1006[0])/2, 
-            (conflict_point_1007[1] + conflict_point_1006[1])/2 + 5, 
-            f'最小距离: {min_dist:.2f}m', fontsize=12, ha='center')
-    
-    # 标记是否被步长跳过
-    if not is_detected:
-        ax.text((conflict_point_1007[0] + conflict_point_1006[0])/2, 
-                (conflict_point_1007[1] + conflict_point_1006[1])/2 - 5, 
-                '⚠️ 此冲突点被步长跳过!', fontsize=14, ha='center', 
-                bbox=dict(facecolor='yellow', alpha=0.5))
+plot_start_end(truck_1011_points, 'r', '1011')
+plot_start_end(truck_1010_points, 'g', '1010')
+plot_start_end(truck_1026_points, 'b', '1026')
 
 # 添加标题和图例
-ax.set_title('路径变化与碰撞检测分析 - 1007号车与1006号车', fontsize=16)
+ax.set_title('矿卡路径分析 - 1011/1010/1026号车', fontsize=16)
 ax.legend(loc='upper right')
 ax.set_xlabel('X坐标 (m)')
 ax.set_ylabel('Y坐标 (m)')
 ax.grid(True)
 
-# 添加说明文本
-explanation = (
-    "分析说明:\n"
-    "1. 绿线: 1007号降级车辆路径(110点)\n"
-    "2. 蓝线: 1006号passing车辆路径(142点)\n"
-    "3. X标记: 路径采样点\n"
-    "4. 品红色X: 两车最接近的潜在碰撞点\n"
-    "5. 虚线矩形: 车辆安全边界\n" +
-    (f"6. ⚠️注意: 最小距离点({min_dist:.2f}m)被步长跳过!" if not is_detected else "")
-)
-ax.text(0.02, 0.02, explanation, transform=ax.transAxes, fontsize=12, 
-        verticalalignment='bottom', bbox=dict(facecolor='white', alpha=0.7))
-
-# 设置坐标轴范围确保可以看到完整路径
-margin = 10
-ax.set_xlim(min(min([p[0] for p in truck_1007_points]), min([p[0] for p in truck_1006_points])) - margin,
-           max(max([p[0] for p in truck_1007_points]), max([p[0] for p in truck_1006_points])) + margin)
-ax.set_ylim(min(min([p[1] for p in truck_1007_points]), min([p[1] for p in truck_1006_points])) - margin,
-           max(max([p[1] for p in truck_1007_points]), max([p[1] for p in truck_1006_points])) + margin)
+# 设置坐标轴范围
+margin = 20
+ax.set_xlim(min(min([p[0] for p in truck_1011_points]), 
+                min([p[0] for p in truck_1010_points]),
+                min([p[0] for p in truck_1026_points])) - margin,
+           max(max([p[0] for p in truck_1011_points]),
+               max([p[0] for p in truck_1010_points]),
+               max([p[0] for p in truck_1026_points])) + margin)
+ax.set_ylim(min(min([p[1] for p in truck_1011_points]),
+                min([p[1] for p in truck_1010_points]),
+                min([p[1] for p in truck_1026_points])) - margin,
+           max(max([p[1] for p in truck_1011_points]),
+               max([p[1] for p in truck_1010_points]),
+               max([p[1] for p in truck_1026_points])) + margin)
 
 # 设置等比例坐标轴
 ax.set_aspect('equal')

@@ -500,41 +500,52 @@ class HybridPathPlanner:
         return inside
 
     def _is_obstacle_fast(self, point):
-        """快速检查点是否为障碍物（使用空间索引优化）"""
+        """强化版快速障碍物检测 - 大幅增强避障范围"""
         # 转换为整数坐标
         x, y = int(round(point[0])), int(round(point[1]))
-        
-        # 使用网格索引
-        if hasattr(self, 'obstacle_index_grid'):
-            grid_x, grid_y = x // self.obstacle_grid_size, y // self.obstacle_grid_size
-            grid_key = (grid_x, grid_y)
+
+        # 直接检查点是否在障碍物集合中
+        if (x, y) in self.obstacle_grids:
+            return True
             
-            # 检查网格中是否有障碍物
-            if grid_key in self.obstacle_index_grid:
-                # 精确检查点是否为障碍物
-                if (x, y) in self.obstacle_index_grid[grid_key]:
-                    return True
-                
-            return False
-        
-        # 回退到基本检查
-        return (x, y) in self.obstacle_grids
+        # 多检查一下周围的点，大幅扩大障碍物的"影响范围"
+        for dx in range(-3, 4):  # 从(-2,3)扩大到(-3,4)
+            for dy in range(-3, 4):
+                if dx == 0 and dy == 0:
+                    continue
+                nx, ny = x + dx, y + dy
+                if (nx, ny) in self.obstacle_grids:
+                    # 使用距离加权 - 越近的障碍物影响越大
+                    distance = math.sqrt(dx*dx + dy*dy)
+                    if distance < 2.0:  # 从1.5增加到2.0，扩大影响范围
+                        return True
+        return False
 
     def _count_nearby_obstacles(self, point, radius=3):
-        """计算指定半径内的障碍物数量"""
-        count = 0
+        """计算点附近障碍物数量 - 增加半径以提前检测障碍物"""
         x, y = point
+        count = 0
+        weight_sum = 0.0  # 加权计数
         
         for dx in range(-radius, radius+1):
             for dy in range(-radius, radius+1):
                 if dx == 0 and dy == 0:
                     continue
                     
-                nx, ny = x + dx, y + dy
-                if self._is_obstacle_fast((nx, ny)):
-                    count += 1
+                nx, ny = int(x + dx), int(y + dy)
+                check_point = (nx, ny)
+                
+                # 确保点在地图范围内
+                if 0 <= nx < self.map_size and 0 <= ny < self.map_size:
+                    if self._is_obstacle_fast(check_point):
+                        # 距离加权 - 越近的障碍物权重越大
+                        distance = math.sqrt(dx*dx + dy*dy)
+                        weight = 1.0 / max(0.5, distance)  # 避免除零
+                        weight_sum += weight
+                        count += 1
         
-        return count
+        # 返回加权后的数量，使近距离障碍物影响更大
+        return count * (1.0 + weight_sum/10.0)
 
     def _is_obstacle(self, point):
         """检查点是否为障碍物（改进版）"""

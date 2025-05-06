@@ -1,19 +1,31 @@
+"""
+强化学习A*算法路径规划器
+为露天矿多车协同调度系统提供高效路径规划能力
+"""
+
+import sys
+import os
 import math
 import time
 import heapq
-import random
 import logging
-from collections import deque
-from typing import List, Tuple, Dict, Set
-import matplotlib.font_manager as fm
-import matplotlib.pyplot as plt
-# 设置中文字体，可以选择系统中已安装的中文字体
-plt.rcParams['font.sans-serif'] = ['SimHei']  # 黑体
-plt.rcParams['axes.unicode_minus'] = False 
+import threading
+import random
+from collections import deque, defaultdict
+from typing import List, Tuple, Dict, Set, Optional
+
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, PROJECT_ROOT)
+
+from utils.geo_tools import GeoUtils
+from utils.path_tools import PathOptimizationError
+
 # 常量定义
 MAX_ITERATIONS = 10000      # 强化A*搜索的最大迭代次数
 DEFAULT_TIMEOUT = 5.0       # 默认超时时间(秒)
 EPSILON = 1e-6              # 浮点数比较精度
+CACHE_SIZE = 1000           # 缓存大小
+CACHE_EXPIRY = 600          # 缓存过期时间(秒)
 DEFAULT_LEARNING_RATE = 0.1  # 默认学习率
 DEFAULT_DISCOUNT_FACTOR = 0.9  # 默认折扣因子
 
@@ -21,8 +33,80 @@ class PathPlanningError(Exception):
     """路径规划错误基类"""
     pass
 
+class TimeoutError(PathPlanningError):
+    """超时错误"""
+    pass
+
+class NoPathFoundError(PathPlanningError):
+    """无法找到路径错误"""
+    pass
+
+class PathCache:
+    """高性能路径缓存系统，用于存储和快速访问已计算的路径"""
+    def __init__(self, max_size=CACHE_SIZE, expiry=CACHE_EXPIRY):
+        self.cache = {}
+        self.timestamps = {}
+        self.max_size = max_size
+        self.expiry = expiry
+        self.lock = threading.RLock()
+        self.hits = 0
+        self.misses = 0
+        
+    def get(self, key):
+        """获取缓存项"""
+        with self.lock:
+            now = time.time()
+            if key in self.cache:
+                # 检查是否过期
+                if now - self.timestamps[key] <= self.expiry:
+                    # 更新时间戳
+                    self.timestamps[key] = now
+                    self.hits += 1
+                    return self.cache[key].copy()  # 返回副本避免修改缓存
+                else:
+                    # 过期删除
+                    del self.cache[key]
+                    del self.timestamps[key]
+            
+            self.misses += 1
+            return None
+            
+    def put(self, key, value):
+        """添加缓存项"""
+        with self.lock:
+            now = time.time()
+            
+            # 检查容量
+            if len(self.cache) >= self.max_size:
+                # 删除最旧的项
+                oldest_key = min(self.timestamps, key=self.timestamps.get)
+                del self.cache[oldest_key]
+                del self.timestamps[oldest_key]
+                
+            # 添加新项
+            self.cache[key] = value.copy()  # 存储副本避免外部修改
+            self.timestamps[key] = now
+            
+    def clear(self):
+        """清空缓存"""
+        with self.lock:
+            self.cache.clear()
+            self.timestamps.clear()
+            
+    def get_stats(self):
+        """获取缓存统计信息"""
+        with self.lock:
+            hit_rate = self.hits / (self.hits + self.misses) if (self.hits + self.misses) > 0 else 0
+            return {
+                'size': len(self.cache),
+                'max_size': self.max_size,
+                'hit_rate': hit_rate,
+                'hits': self.hits,
+                'misses': self.misses
+            }
+
 class ReinforcedAStar:
-    """简化版强化A*算法实现"""
+    """强化A*算法实现，提供智能路径规划功能"""
     
     def __init__(self, obstacle_grids=None, map_size=200, learning_rate=DEFAULT_LEARNING_RATE, discount_factor=DEFAULT_DISCOUNT_FACTOR):
         self.learning_rate = learning_rate
@@ -65,8 +149,8 @@ class ReinforcedAStar:
         d_euclidean = math.sqrt(dx*dx + dy*dy)
         
         # 计算障碍物影响因子
-        obstacles_nearby = self.count_nearby_obstacles(current, radius=3)
-        obstacle_factor = 1.0 + (obstacles_nearby * 0.1)
+        obstacles_nearby = self.count_nearby_obstacles(current, radius=5)
+        obstacle_factor = 1.0 + (obstacles_nearby * 0.5)
         
         return d_euclidean * obstacle_factor
 
@@ -79,7 +163,7 @@ class ReinforcedAStar:
             action_values = self.q_values[state].values()
             if action_values:
                 # 正向调整 - 奖励途经Q值高的区域
-                return -0.5 * (sum(action_values) / len(action_values))
+                return -1.0 * (sum(action_values) / len(action_values))
         
         return 0  # 默认不调整
     
@@ -161,7 +245,8 @@ class ReinforcedAStar:
     def pathfind(self, start, goal, max_iterations=MAX_ITERATIONS):
         """强化A*路径规划主方法"""
         logging.info(f"开始强化A*路径规划: 从 {start} 到 {goal}")
-        
+        min_dist_to_goal = float('inf')
+        no_improvement_count = 0
         # 验证起点和终点不在障碍物上
         if self.is_obstacle(start):
             start = self.find_safe_point_near(start)
@@ -217,7 +302,12 @@ class ReinforcedAStar:
             # 记录路径上的状态
             current_state = self.get_state_representation(current)
             path_states.append(current_state)
-            
+            curr_dist_to_goal = math.dist(current, goal)
+            if curr_dist_to_goal < min_dist_to_goal:
+                min_dist_to_goal = curr_dist_to_goal
+                no_improvement_count = 0
+            else:
+                no_improvement_count += 1
             # 检查是否到达目标
             if self.close_enough(current, goal):
                 # 重建路径
@@ -306,7 +396,7 @@ class ReinforcedAStar:
                         learned_adjustment = self.get_learned_adjustment(neighbor, goal)
                         f_score[neighbor] = tentative_g + h_value + learned_adjustment
                         
-                        # 计算即时奖励
+                                        # 计算即时奖励
                         reward = self.calculate_reward(current, neighbor, goal)
                         
                         # 更新Q值
@@ -605,7 +695,32 @@ class ReinforcedAStar:
             current_q = self.q_values[state].get(action, 0)
             # 对失败路径的惩罚
             self.q_values[state][action] = current_q - self.learning_rate * 10
-    
+    def smooth_path(self, path, smoothing_factor=0.5):
+        """使用贝塞尔曲线平滑路径"""
+        if len(path) <= 2:
+            return path
+            
+        smoothed = [path[0]]  # 保留起点
+        
+        # 对中间段进行平滑
+        for i in range(1, len(path)-1):
+            prev = path[i-1]
+            current = path[i]
+            next_point = path[i+1]
+            
+            # 计算平滑点
+            smooth_x = current[0] + smoothing_factor * (0.5 * (prev[0] + next_point[0]) - current[0])
+            smooth_y = current[1] + smoothing_factor * (0.5 * (prev[1] + next_point[1]) - current[1])
+            
+            # 确保平滑点不在障碍物上
+            smooth_point = (smooth_x, smooth_y)
+            if not self.is_obstacle(smooth_point):
+                smoothed.append(smooth_point)
+            else:
+                smoothed.append(current)  # 使用原始点
+        
+        smoothed.append(path[-1])  # 保留终点
+        return smoothed    
     def calculate_reward(self, current, next_pos, goal):
         """奖励函数"""
         # 基础奖励
@@ -615,14 +730,14 @@ class ReinforcedAStar:
         current_dist = math.dist(current, goal)
         next_dist = math.dist(next_pos, goal)
         progress_reward = current_dist - next_dist
-        reward += progress_reward * 3.0
+        reward += progress_reward * 5.0
         
         # 检查障碍物
         obstacles_nearby = self.count_nearby_obstacles(next_pos, radius=3)
         
         # 障碍物惩罚
         if obstacles_nearby > 0:
-            obstacle_penalty = -3.0 * obstacles_nearby
+            obstacle_penalty = -20.0 * obstacles_nearby
             reward += obstacle_penalty
         else:
             reward += 5.0
@@ -648,7 +763,6 @@ class ReinforcedAStar:
                 self.collision_history[collision_key] = 1
                 
         return reward
-    
     def reconstruct_path(self, came_from, current):
         """重建路径"""
         path = [current]
@@ -657,11 +771,11 @@ class ReinforcedAStar:
             path.append(current)
             
         return path[::-1]  # 逆序返回路径
-    
+        
     def close_enough(self, point1, point2, threshold=3.0):
         """检查两点是否足够接近"""
         return math.dist(point1, point2) <= threshold
-    
+        
     def is_valid_position(self, pos):
         """检查位置是否有效（在地图范围内）"""
         x, y = pos
@@ -670,7 +784,7 @@ class ReinforcedAStar:
             return False
             
         return True
-    
+        
     def is_obstacle(self, point):
         """障碍物检测 - 增强版"""
         # 转换为整数坐标
@@ -707,3 +821,183 @@ class ReinforcedAStar:
                         count += 1
         
         return count
+class MultiLevelCache:
+    """多级缓存系统，支持精确匹配和近似匹配"""
+    def __init__(self, max_size=1000, expiry=600):
+        self.exact_cache = {}  # 精确匹配缓存
+        self.approx_cache = {}  # 近似匹配缓存
+        self.timestamps = {}  # 缓存时间戳
+        self.max_size = max_size  # 最大缓存项数
+        self.expiry = expiry  # 过期时间(秒)
+        self.lock = threading.RLock()  # 线程锁
+        
+        # 统计信息
+        self.exact_hits = 0
+        self.approx_hits = 0
+        self.misses = 0
+        
+    def get(self, key, tolerance=3.0):
+        """
+        获取缓存项
+        
+        Args:
+            key: 缓存键
+            tolerance: 近似匹配的容差
+            
+        Returns:
+            (path, is_exact): 路径和是否为精确匹配
+        """
+        with self.lock:
+            now = time.time()
+            
+            # 精确查找
+            if key in self.exact_cache:
+                # 检查是否过期
+                if now - self.timestamps[key] <= self.expiry:
+                    # 更新时间戳
+                    self.timestamps[key] = now
+                    self.exact_hits += 1
+                    return self.exact_cache[key].copy(), True
+                else:
+                    # 过期删除
+                    del self.exact_cache[key]
+                    del self.timestamps[key]
+            
+            # 近似查找
+            if len(key) >= 3:  # 确保键包含起点和终点
+                start, end = key[1], key[2]
+                
+                for cached_key, path in list(self.approx_cache.items()):
+                    # 确保键格式一致
+                    if len(cached_key) < 3:
+                        continue
+                        
+                    cached_start, cached_end = cached_key[1], cached_key[2]
+                    
+                    if (math.dist(start, cached_start) < tolerance and 
+                        math.dist(end, cached_end) < tolerance):
+                        
+                        # 检查过期
+                        if cached_key in self.timestamps and now - self.timestamps[cached_key] <= self.expiry:
+                            # 更新时间戳
+                            self.timestamps[cached_key] = now
+                            self.approx_hits += 1
+                            return path.copy(), False
+                        elif cached_key in self.timestamps:
+                            # 过期删除
+                            del self.approx_cache[cached_key]
+                            del self.timestamps[cached_key]
+            
+            self.misses += 1
+            return None, False
+            
+    def put(self, key, value, is_exact=True):
+        """
+        添加缓存项
+        
+        Args:
+            key: 缓存键
+            value: 路径值
+            is_exact: 是否为精确匹配
+        """
+        with self.lock:
+            now = time.time()
+            
+            # 检查容量
+            total_size = len(self.exact_cache) + len(self.approx_cache)
+            if total_size >= self.max_size:
+                # 删除最旧的项
+                if self.timestamps:
+                    oldest_key = min(self.timestamps, key=self.timestamps.get)
+                    
+                    if oldest_key in self.exact_cache:
+                        del self.exact_cache[oldest_key]
+                    elif oldest_key in self.approx_cache:
+                        del self.approx_cache[oldest_key]
+                        
+                    del self.timestamps[oldest_key]
+                    
+            # 添加新项
+            target_cache = self.exact_cache if is_exact else self.approx_cache
+            target_cache[key] = value.copy()  # 存储副本避免外部修改
+            self.timestamps[key] = now
+            
+    def clear(self):
+        """清空缓存"""
+        with self.lock:
+            self.exact_cache.clear()
+            self.approx_cache.clear()
+            self.timestamps.clear()
+            
+            # 重置统计信息
+            self.exact_hits = 0
+            self.approx_hits = 0
+            self.misses = 0
+            
+    def get_stats(self):
+        """获取缓存统计信息"""
+        with self.lock:
+            total_hits = self.exact_hits + self.approx_hits
+            total_requests = total_hits + self.misses
+            
+            hit_rate = total_hits / total_requests if total_requests > 0 else 0
+            exact_hit_rate = self.exact_hits / total_requests if total_requests > 0 else 0
+            approx_hit_rate = self.approx_hits / total_requests if total_requests > 0 else 0
+            
+            return {
+                'size': len(self.exact_cache) + len(self.approx_cache),
+                'exact_size': len(self.exact_cache),
+                'approx_size': len(self.approx_cache),
+                'max_size': self.max_size,
+                'hit_rate': hit_rate,
+                'exact_hit_rate': exact_hit_rate,
+                'approx_hit_rate': approx_hit_rate,
+                'exact_hits': self.exact_hits,
+                'approx_hits': self.approx_hits,
+                'misses': self.misses
+            }
+    
+    def contains(self, key, tolerance=3.0):
+        """
+        检查键是否在缓存中
+        
+        Args:
+            key: 缓存键
+            tolerance: 近似匹配的容差
+            
+        Returns:
+            bool: 是否存在于缓存中
+        """
+        path, _ = self.get(key, tolerance)
+        return path is not None
+    
+    def update_obstacle(self, obstacle_point, radius=10.0):
+        """
+        障碍物更新时，清理受影响的缓存路径
+        
+        Args:
+            obstacle_point: 障碍物坐标
+            radius: 影响半径
+        """
+        with self.lock:
+            # 检查精确缓存和近似缓存
+            affected_keys = []
+            
+            # 检查所有缓存中的路径
+            for cache_dict in [self.exact_cache, self.approx_cache]:
+                for key, path in list(cache_dict.items()):
+                    # 检查路径是否经过障碍物附近
+                    for point in path:
+                        if math.dist(point, obstacle_point) < radius:
+                            affected_keys.append(key)
+                            break
+            
+            # 删除受影响的缓存
+            for key in affected_keys:
+                if key in self.exact_cache:
+                    del self.exact_cache[key]
+                elif key in self.approx_cache:
+                    del self.approx_cache[key]
+                    
+                if key in self.timestamps:
+                    del self.timestamps[key]

@@ -1,45 +1,34 @@
 import matplotlib.pyplot as plt
 import numpy as np
-from matplotlib.patches import Rectangle, Polygon
 import matplotlib
 import math
+
 # 设置中文字体
-matplotlib.rcParams['font.sans-serif'] = ['SimHei', 'DejaVu Sans', 'Arial Unicode MS', 'sans-serif']  # 优先使用的中文字体
+matplotlib.rcParams['font.sans-serif'] = ['SimHei', 'DejaVu Sans', 'Arial Unicode MS', 'sans-serif']
 matplotlib.rcParams['axes.unicode_minus'] = False 
-# 使用实际数据（从日志中提取的）
-# 1011号车辆数据
-truck_1011_samples = [
-    (0, 58.86, -15.81),
-    (20, 43.82, -28.01),
+
+# 从日志中提取的车辆路径数据
+# 1007号车辆数据
+truck_1007_samples = [
+    (0, 58.78, -15.39),
+    (20, 43.84, -28.02),
     (40, 25.47, -23.62),
     (60, 18.92, -4.97),
     (80, 9.81, 12.32),
-    (None, 1.90, 22.64)
+    (100, -2.30, 28.25),
+    (None, -11.24, 40.29)  # 终点
 ]
 
-# 1010号车辆数据
-truck_1010_samples = [
-    (0, 65.26, -22.74),
-    (20, 49.73, -34.79),
-    (40, 31.16, -29.80),
-    (60, 20.61, -13.29),
-    (80, 14.27, 5.62),
-    (None, 2.50, 21.85)
-]
-
-# truck_1026号车辆数据
-truck_1026_samples = [
-    (0, 32.07, -62.33),
-    (20, 21.60, -45.69),
-    (40, 20.46, -26.71),
-    (60, 18.98, -6.78),
-    (80, 10.97, 10.70),
-    (None, -1.10, 26.64),
-    (120, -13.02, 42.70),
-    (140, -24.94, 58.76),
-    (160, -36.95, 74.76),
-    (180, -48.97, 90.74),
-    (200, -61.00, 106.72)
+# 1006号车辆数据
+truck_1006_samples = [
+    (0, 66.07, -21.27),
+    (20, 50.69, -34.54),
+    (40, 31.96, -30.41),
+    (60, 20.85, -14.26),
+    (80, 14.80, 4.73),
+    (100, 3.11, 21.05),
+    (120, -8.86, 37.08),
+    (None, -11.24, 40.29)  # 终点
 ]
 
 # 根据采样点生成完整路径数据
@@ -81,58 +70,44 @@ def generate_path_from_samples(samples, total_points):
     
     return path
 
-truck_1011_points = generate_path_from_samples(truck_1011_samples, 94)
-truck_1010_points = generate_path_from_samples(truck_1010_samples, 102)
-truck_1026_points = generate_path_from_samples(truck_1026_samples, 201)
-
-# 车辆尺寸参数
-truck_length = 12.0  # 矿卡通常较大
-truck_width = 6.0
-safe_margin = 1.0
+# 生成完整路径
+truck_1007_points = generate_path_from_samples(truck_1007_samples, 116)
+truck_1006_points = generate_path_from_samples(truck_1006_samples, 125)
 
 # 创建图形
-fig, ax = plt.subplots(figsize=(14, 10))
+plt.figure(figsize=(12, 8))
 
-# 绘制三辆车的路径
-ax.plot([p[0] for p in truck_1011_points], [p[1] for p in truck_1011_points], 'r-', label='1011号车')
-ax.plot([p[0] for p in truck_1010_points], [p[1] for p in truck_1010_points], 'g-', label='1010号车')
-ax.plot([p[0] for p in truck_1026_points], [p[1] for p in truck_1026_points], 'b-', label='truck_1026')
+# 绘制路径
+plt.plot([p[0] for p in truck_1007_points], [p[1] for p in truck_1007_points], 'r-', label='1007号车')
+plt.plot([p[0] for p in truck_1006_points], [p[1] for p in truck_1006_points], 'g-', label='1006号车')
 
-# 标记起点和终点
+# 绘制起点和终点
 def plot_start_end(points, color, label):
-    ax.plot(points[0][0], points[0][1], f'{color}o', markersize=8)
-    ax.text(points[0][0]+1, points[0][1]+1, f'{label}起点', fontsize=10)
-    ax.plot(points[-1][0], points[-1][1], f'{color}*', markersize=10)
-    ax.text(points[-1][0]+1, points[-1][1]+1, f'{label}终点', fontsize=10)
+    plt.plot(points[0][0], points[0][1], f'{color}o', markersize=8)
+    plt.text(points[0][0]+1, points[0][1]+1, f'{label}起点', fontsize=10)
+    plt.plot(points[-1][0], points[-1][1], f'{color}*', markersize=10)
+    plt.text(points[-1][0]+1, points[-1][1]+1, f'{label}终点', fontsize=10)
 
-plot_start_end(truck_1011_points, 'r', '1011')
-plot_start_end(truck_1010_points, 'g', '1010')
-plot_start_end(truck_1026_points, 'b', '1026')
+plot_start_end(truck_1007_points, 'r', '1007')
+plot_start_end(truck_1006_points, 'g', '1006')
 
-# 添加标题和图例
-ax.set_title('矿卡路径分析 - 1011/1010/1026号车', fontsize=16)
-ax.legend(loc='upper right')
-ax.set_xlabel('X坐标 (m)')
-ax.set_ylabel('Y坐标 (m)')
-ax.grid(True)
+# 标记碰撞点
+collision_x1, collision_y1 = 5.55, 17.89
+collision_x2, collision_y2 = -0.50, 25.84
+plt.plot([collision_x1, collision_x2], [collision_y1, collision_y2], 'ko-', label='碰撞区域')
+plt.text(collision_x1, collision_y1, '碰撞点1', fontsize=10)
+plt.text(collision_x2, collision_y2, '碰撞点2', fontsize=10)
 
-# 设置坐标轴范围
-margin = 20
-ax.set_xlim(min(min([p[0] for p in truck_1011_points]), 
-                min([p[0] for p in truck_1010_points]),
-                min([p[0] for p in truck_1026_points])) - margin,
-           max(max([p[0] for p in truck_1011_points]),
-               max([p[0] for p in truck_1010_points]),
-               max([p[0] for p in truck_1026_points])) + margin)
-ax.set_ylim(min(min([p[1] for p in truck_1011_points]),
-                min([p[1] for p in truck_1010_points]),
-                min([p[1] for p in truck_1026_points])) - margin,
-           max(max([p[1] for p in truck_1011_points]),
-               max([p[1] for p in truck_1010_points]),
-               max([p[1] for p in truck_1026_points])) + margin)
+# 设置图形属性
+plt.grid(True)
+plt.axis('equal')
+plt.xlabel('X坐标 (m)')
+plt.ylabel('Y坐标 (m)')
+plt.title('矿卡路径分析与碰撞检测', fontsize=14)
+plt.legend(loc='upper right')
 
-# 设置等比例坐标轴
-ax.set_aspect('equal')
+# 添加uuid信息
+plt.text(0.02, 0.02, 'uuid: 5759ceb9bbd745dc9752db5347660aa9', fontsize=8, transform=plt.gcf().transFigure)
 
 plt.tight_layout()
 plt.show()

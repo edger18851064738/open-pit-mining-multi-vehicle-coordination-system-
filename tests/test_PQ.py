@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 optimized_path_planner 复杂地图测试脚本
 

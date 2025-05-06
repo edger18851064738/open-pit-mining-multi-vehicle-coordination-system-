@@ -24,7 +24,7 @@ def extract_last_5_percent(input_file_path, output_file_path):
     print(f"提取内容大小: {len(content)} 字节")
 
 if __name__ == "__main__":
-    input_file = r"C:\工作\biz_road_conflict(5).log"
-    output_file = r"C:\工作\biz_road_conflict(5)_last_5_percent.log"
+    input_file = r"C:\mine\reinforce\data\biz_road_conflict(8).log"
+    output_file = r"C:\工作\biz_road_conflict(8)_last_5_percent.log"
     
     extract_last_5_percent(input_file, output_file)

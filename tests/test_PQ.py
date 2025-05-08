@@ -42,7 +42,7 @@ logging.basicConfig(
 
 # 导入项目模块
 try:
-    from algorithm.optimized_path_planner import HybridPathPlanner
+    from algorithm.hybrid_path_planner import HybridPathPlanner
     from algorithm.map_service import MapService
     from algorithm.cbs import ConflictBasedSearch
     from utils.geo_tools import GeoUtils

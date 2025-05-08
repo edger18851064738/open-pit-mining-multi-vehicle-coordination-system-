@@ -107,23 +107,34 @@ class TransportTask:
         self._total_distance = 0.0
         
     def _validate_coordinate(self, point) -> Tuple[float, float]:
-        """统一坐标验证与转换"""
-        if isinstance(point, tuple) and len(point) == 2:
-            return (float(point[0]), float(point[1]))
-        elif isinstance(point, Node):
-            return (float(point.x), float(point.y))
-        elif isinstance(point, str):
-            try:
-                # 处理字符串格式 "(x,y)"
-                x, y = map(float, point.strip('()').split(','))
-                return (x, y)
-            except Exception:
-                raise ValueError(f"无效坐标字符串格式: {point}")
-        elif hasattr(point, 'x') and hasattr(point, 'y'):
-            # 处理通用点对象
-            return (float(point.x), float(point.y))
-            
-        raise ValueError(f"不支持的坐标类型: {type(point)}")
+        """统一坐标验证与转换，确保返回二维(x,y)点"""
+        try:
+            if isinstance(point, tuple):
+                # 修改：处理任何长度的元组，只取前两个坐标
+                if len(point) >= 2:
+                    return (float(point[0]), float(point[1]))
+                else:
+                    raise ValueError(f"点坐标维度不足: {point}")
+            elif isinstance(point, Node):
+                return (float(point.x), float(point.y))
+            elif isinstance(point, str):
+                try:
+                    # 处理字符串格式 "(x,y)"或"(x,y,theta)"
+                    coords = point.strip('()').split(',')
+                    if len(coords) >= 2:
+                        return (float(coords[0]), float(coords[1]))
+                    else:
+                        raise ValueError(f"坐标格式错误: {point}")
+                except Exception as e:
+                    raise ValueError(f"无效坐标字符串格式: {point}, 错误: {str(e)}")
+            elif hasattr(point, 'x') and hasattr(point, 'y'):
+                # 处理通用点对象
+                return (float(point.x), float(point.y))
+                
+            raise ValueError(f"不支持的坐标类型: {type(point)}")
+        except Exception as e:
+            logging.error(f"坐标验证出错: {str(e)}")
+            raise ValueError(f"坐标验证失败: {str(e)}")
         
     def validate_for_vehicle(self, vehicle) -> bool:
         """验证车辆是否适合执行此任务"""

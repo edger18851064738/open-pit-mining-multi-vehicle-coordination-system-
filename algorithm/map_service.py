@@ -279,22 +279,38 @@ class MapService:
         ]
         
     def plan_route(self, start: Tuple[float, float], end: Tuple[float, float], vehicle_type: str = 'empty') -> Dict:
-        """规划路径（集成path_planner）
+        """
+        规划路径（集成path_planner）
         
         Args:
             start: 起点坐标
             end: 终点坐标
             vehicle_type: 车辆类型（empty或loaded）
-            
+                
         Returns:
             Dict: 包含path和distance的字典
         """
         try:
-            # 导入path_planner
-            from algorithm.path_planner import HybridPathPlanner
+            # 确保起点和终点是二维坐标
+            start_2d = (start[0], start[1]) if isinstance(start, tuple) and len(start) >= 2 else start
+            end_2d = (end[0], end[1]) if isinstance(end, tuple) and len(end) >= 2 else end
+            
+            logging.debug(f"规划路径: 从 {start_2d} 到 {end_2d}, 车辆类型: {vehicle_type}")
+            
+            # 正确导入路径规划器
+            try:
+                from algorithm.hybrid_path_planner import HybridPathPlanner as PathPlannerClass
+                logging.debug("使用hybrid_path_planner")
+            except ImportError:
+                try:
+                    from algorithm.path_planner import HybridPathPlanner as PathPlannerClass
+                    logging.debug("使用path_planner备选")
+                except ImportError:
+                    logging.error("无法导入任何路径规划器")
+                    raise ImportError("缺少路径规划器模块")
             
             # 创建规划器实例
-            planner = HybridPathPlanner(self)
+            planner = PathPlannerClass(self)
             
             # 创建车辆配置
             vehicle_config = {
@@ -307,26 +323,77 @@ class MapService:
             try:
                 # 先尝试使用完整的车辆对象
                 from models.vehicle import MiningVehicle as PlannerVehicle
-                vehicle = PlannerVehicle("temp", self, vehicle_config)
-                path = planner.plan_path(start, end, vehicle)
+                vehicle = PlannerVehicle(1, self, vehicle_config)
+                path = planner.plan_path(start_2d, end_2d, vehicle)
+                logging.debug(f"使用车辆对象规划路径: 得到 {len(path) if path else 0} 个点")
             except Exception as e:
-                logging.warning(f"HybridPathPlanner规划失败: {str(e)}, 尝试备选方案")
-                # 如果失败，尝试直接连接起点和终点
-                path = [start, end]
+                logging.warning(f"使用车辆对象规划路径失败: {str(e)}, 尝试直接规划")
+                try:
+                    # 如果失败，尝试直接规划
+                    path = planner.plan_path(start_2d, end_2d)
+                    logging.debug(f"直接规划路径: 得到 {len(path) if path else 0} 个点")
+                except Exception as e2:
+                    logging.error(f"路径规划完全失败: {str(e2)}, 使用直线连接")
+                    # 如果还是失败，使用直线连接
+                    path = [start_2d, end_2d]
             
-            # 计算路径距离
-            distance = sum(math.dist(path[i], path[i+1]) for i in range(len(path)-1)) if len(path) > 1 else 0
+            # 标准化路径，确保所有点都是二维浮点坐标
+            normalized_path = []
+            if path:
+                for point in path:
+                    if isinstance(point, tuple):
+                        if len(point) >= 2:
+                            # 只取前两个坐标，转换为浮点数
+                            normalized_path.append((float(point[0]), float(point[1])))
+                        else:
+                            logging.warning(f"跳过无效路径点(维度不足): {point}")
+                    elif hasattr(point, 'x') and hasattr(point, 'y'):
+                        # 对象转换为坐标点
+                        normalized_path.append((float(point.x), float(point.y)))
+                    else:
+                        logging.warning(f"跳过无效路径点(类型错误): {type(point)}")
             
-            return {
-                'path': path,
+            # 如果标准化后路径为空，使用直线
+            if not normalized_path:
+                logging.warning("标准化后路径为空，使用直线连接")
+                normalized_path = [start_2d, end_2d]
+            
+            # 安全计算路径距离
+            distance = 0.0
+            for i in range(len(normalized_path) - 1):
+                try:
+                    p1, p2 = normalized_path[i], normalized_path[i+1]
+                    dx = p2[0] - p1[0]
+                    dy = p2[1] - p1[1]
+                    segment_dist = math.sqrt(dx*dx + dy*dy)
+                    distance += segment_dist
+                except Exception as e:
+                    logging.error(f"计算路径段距离出错: {str(e)}")
+            
+            # 检查结果合理性
+            if distance == 0 and len(normalized_path) > 1:
+                logging.warning("路径距离为0，可能存在问题")
+            
+            result = {
+                'path': normalized_path,
                 'distance': distance
             }
+            
+            logging.debug(f"规划完成: 路径长度 {len(normalized_path)}，总距离 {distance:.2f}")
+            return result
+            
         except Exception as e:
-            logging.error(f"路径规划失败: {str(e)}")
+            logging.error(f"路径规划过程发生异常: {str(e)}")
             # 返回直线路径作为备用
+            backup_path = [start, end]
+            try:
+                backup_distance = math.sqrt((end[0]-start[0])**2 + (end[1]-start[1])**2)
+            except:
+                backup_distance = 0.0
+                
             return {
-                'path': [start, end],
-                'distance': math.dist(start, end)
+                'path': backup_path,
+                'distance': backup_distance
             }
             
     def validate_path(self, path: List[Tuple]) -> bool:

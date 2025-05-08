@@ -167,19 +167,34 @@ class MiningVehicle:
             # 保存之前的路径用于指标计算
             old_path_len = len(self.current_path) if self.current_path else 0
             
-            self.current_path = path
+            # 标准化路径点为二维
+            normalized_path = []
+            for point in path:
+                if isinstance(point, tuple):
+                    if len(point) >= 2:
+                        normalized_path.append((float(point[0]), float(point[1])))
+                    else:
+                        logging.warning(f"车辆 {self.vehicle_id} 路径点维度异常: {point}")
+                        return
+                else:
+                    logging.warning(f"车辆 {self.vehicle_id} 路径点格式异常: {point}")
+                    return
+            
+            self.current_path = normalized_path
             self.path_index = 0
             
-            # 确保当前位置与路径起点一致
-            if math.dist(self.current_location, path[0]) > 0.1:
-                logging.debug(f"车辆 {self.vehicle_id} 当前位置({self.current_location})与路径起点({path[0]})不一致，已自动调整")
-                self.current_location = path[0]
-                
-            # 如果重新规划了路径，记录一次冲突
-            if old_path_len > 0 and old_path_len != len(path):
-                self.metrics['conflicts'] += 1
-                
-            logging.debug(f"车辆 {self.vehicle_id} 分配了新路径，长度: {len(path)}")
+            # 确保当前位置是二维点
+            current_loc_2d = (self.current_location[0], self.current_location[1]) if len(self.current_location) > 2 else self.current_location
+            path_start = self.current_path[0]
+            
+            # 安全计算距离
+            try:
+                distance = math.sqrt((current_loc_2d[0] - path_start[0])**2 + (current_loc_2d[1] - path_start[1])**2)
+                if distance > 0.1:
+                    logging.debug(f"车辆 {self.vehicle_id} 当前位置({current_loc_2d})与路径起点({path_start})不一致，已自动调整")
+                    self.current_location = path_start
+            except Exception as e:
+                logging.error(f"车辆 {self.vehicle_id} 路径起点检查出错: {str(e)}")
             
     def update_position(self):
         """更新车辆位置（沿着路径移动）"""

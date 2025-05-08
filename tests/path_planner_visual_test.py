@@ -1,14 +1,16 @@
-#!/usr/bin/env python3
+
 """
-HybridPathPlanner 增强可视化测试工具
+Enhanced Hybrid Path Planner Test Script
 
-此脚本用于测试和可视化路径规划器的路径规划功能，通过动态可视化展示：
-1. 路径规划过程和冲突检测
-2. 多车协同运动 
-3. 地图障碍物和关键点
-4. A*搜索过程分析
+This script tests and visualizes the Hybrid A* path planner with Reeds-Shepp curves
+for vehicle path planning in open-pit mining environments.
 
-为定位 optimized_path_planner 中的问题提供直观界面。
+Features:
+1. Complex obstacle environments 
+2. Multiple vehicle path planning
+3. Visualization of vehicle kinematics constraints
+4. Comparison with basic path planning
+5. Enhanced visualization and animation
 """
 
 import os
@@ -18,1226 +20,1963 @@ import math
 import random
 import logging
 import numpy as np
-import matplotlib.pyplot as plt
-import matplotlib.animation as animation
-from matplotlib.patches import Rectangle, Circle, Polygon, Arrow
-from matplotlib.colors import to_rgba
-import matplotlib.gridspec as gridspec
 from typing import List, Tuple, Dict, Optional, Set
-from collections import deque
-import threading
 import argparse
 
-# 添加项目根目录到路径
+# Add project root directory to path
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, PROJECT_ROOT)
 
-# 配置日志
+# Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
 
-# 导入项目模块
+# Import required modules 
 try:
-    from algorithm.optimized_path_planner import HybridPathPlanner
+    from algorithm.hybrid_path_planner import HybridPathPlanner
     from algorithm.map_service import MapService
     from algorithm.cbs import ConflictBasedSearch
     from utils.geo_tools import GeoUtils
     from models.vehicle import MiningVehicle, VehicleState
-    logging.info("成功导入所需模块")
-except ImportError as e:
-    logging.error(f"导入模块失败: {str(e)}")
-    sys.exit(1)
-# 在导入模块后添加以下代码，设置中文字体支持
-def setup_chinese_font():
-    """设置中文字体支持"""
-    import matplotlib as mpl
+    from enhanced_visualization import EnhancedVisualization
+    
+    # Check if matplotlib is available for visualization
     try:
-        # 尝试使用系统中文字体
-        fonts = ['SimHei', 'Microsoft YaHei', 'SimSun', 'FangSong', 'KaiTi']
-        for font in fonts:
-            try:
-                mpl.rcParams['font.sans-serif'] = [font] + mpl.rcParams['font.sans-serif']
-                mpl.rcParams['axes.unicode_minus'] = False  # 解决负号显示问题
-                # 测试字体是否可用
-                from matplotlib.font_manager import FontProperties
-                FontProperties(family=font)
-                logging.info(f"成功设置中文字体: {font}")
-                return True
-            except:
-                continue
-                
-        # 如果系统字体都不可用，尝试使用Matplotlib内置字体
-        mpl.rcParams['font.sans-serif'] = ['DejaVu Sans'] + mpl.rcParams['font.sans-serif']
-        logging.warning("未找到合适的中文字体，使用默认字体，中文可能显示为方块")
-        return False
-    except Exception as e:
-        logging.warning(f"设置中文字体时出错: {str(e)}")
-        return False
+        import matplotlib.pyplot as plt
+        HAS_MATPLOTLIB = True
+    except ImportError:
+        logging.warning("Matplotlib not found. Visualization will be disabled.")
+        HAS_MATPLOTLIB = False
+        
+    logging.info("Successfully imported required modules")
+except ImportError as e:
+    logging.error(f"Failed to import modules: {str(e)}")
+    sys.exit(1)
 
-# 在__init__方法中调用此函数
-class PathPlannerVisualizer:
-    """路径规划器高级可视化测试工具"""
+class MineEnvironment:
+    """Simple mine environment for testing path planning"""
     
-    def __init__(self, map_size=200, num_vehicles=5, num_test_points=6, debug_mode=False):
-        """初始化可视化环境"""
-        # 设置地图尺寸
-        self.map_size = map_size
-        self.num_vehicles = num_vehicles
-        self.num_test_points = num_test_points
-        self.debug_mode = debug_mode
+    def __init__(self, width=200, height=200):
+        """Initialize mine environment"""
+        self.width = width
+        self.height = height
+        self.grid = np.zeros((width, height), dtype=int)  # 0 = free, 1 = obstacle
+        self.loading_points = []
+        self.unloading_points = []
+        self.vehicles = {}
         
-        # 创建地图服务和路径规划器
-        self.geo_utils = GeoUtils()
-        self.map_service = MapService()
-        self.planner = HybridPathPlanner(self.map_service)
-        
-        # 初始化冲突检测器
-        self.cbs = ConflictBasedSearch(self.planner)
-        
-        # 初始化测试对象
-        self.vehicles = self._create_test_vehicles()
-        self.test_points = self._create_test_points()
-        self.obstacles = self._create_obstacles()
-        
-        # 将障碍物应用到规划器
-        self.planner.obstacle_grids = set(self.obstacles)
-        
-        # Mock dispatch 对象 (路径规划器需要)
-        class MockDispatch:
-            def __init__(self):
-                self.vehicles = {}
-        
-        mock_dispatch = MockDispatch()
-        for vehicle in self.vehicles:
-            mock_dispatch.vehicles[vehicle.vehicle_id] = vehicle
-        self.planner.dispatch = mock_dispatch
-        
-        # 路径规划测试参数
-        self.current_test_idx = 0
-        self.test_pairs = []
-        self._generate_test_pairs()
-        
-        # 动画控制
-        self.animation_speed = 1.0
-        self.show_path = True
-        self.pause = False
-        self.step_mode = False
-        
-        # 当前活动车辆和路径
-        self.active_vehicles = []
-        self.vehicle_paths = {}
-        self.vehicle_path_progress = {}
-        
-        # A*调试数据
-        self.debug_data = {
-            'visited_nodes': [],
-            'current_path': [],
-            'open_set': [],
-            'closed_set': [],
-            'current_node': None
+        # Create default points
+        self.add_loading_point((30, 170))  # Example loading point
+        self.add_unloading_point((170, 30))  # Example unloading point
+    
+    def add_loading_point(self, point):
+        """Add loading point"""
+        self.loading_points.append(point)
+    
+    def add_unloading_point(self, point):
+        """Add unloading point"""
+        self.unloading_points.append(point)
+    
+    def add_vehicle(self, vehicle_id, position, target=None, status='idle'):
+        """Add vehicle to environment"""
+        if isinstance(position, tuple) and len(position) == 2:
+            # Add default orientation
+            position = (position[0], position[1], 0)
+            
+        self.vehicles[vehicle_id] = {
+            'position': position,
+            'target': target,
+            'status': status,
+            'path': [],
+            'load': 0,  # Current load (0 = empty)
+            'max_load': 100,  # Maximum load capacity
+            'color': [random.random(), random.random(), random.random()]  # Random color
         }
-        
-        # 性能数据收集
-        self.stats = {
-            'planning_times': [],
-            'path_lengths': [],
-            'conflicts': [],
-            'visited_nodes_count': []
-        }
-        
-        # 执行历史记录
-        self.history = []
-        
-        # 视图控制
-        self.view_mode = "normal"  # normal, debug, heatmap
-        
-        # 设置可视化
-        self.setup_visualization()
-        
-        logging.info("可视化环境初始化完成")
     
-    def _create_test_vehicles(self) -> List[MiningVehicle]:
-        """创建测试车辆"""
-        vehicles = []
-        
-        # 车辆起始位置（均匀分布在地图边缘）
-        positions = []
-        
-        # 左边缘
-        for i in range(self.num_vehicles // 4 + 1):
-            y = self.map_size * (i + 1) / (self.num_vehicles // 4 + 2)
-            positions.append((20, y))
-            
-        # 右边缘
-        for i in range(self.num_vehicles // 4 + 1):
-            y = self.map_size * (i + 1) / (self.num_vehicles // 4 + 2)
-            positions.append((self.map_size - 20, y))
-            
-        # 上边缘
-        for i in range(self.num_vehicles // 4 + 1):
-            x = self.map_size * (i + 1) / (self.num_vehicles // 4 + 2)
-            positions.append((x, self.map_size - 20))
-            
-        # 下边缘
-        for i in range(self.num_vehicles // 4 + 1):
-            x = self.map_size * (i + 1) / (self.num_vehicles // 4 + 2)
-            positions.append((x, 20))
-        
-        # 确保有足够的起始位置
-        while len(positions) < self.num_vehicles:
-            positions.append((random.randint(20, self.map_size-20), 
-                            random.randint(20, self.map_size-20)))
-            
-        # 随机颜色
-        colors = plt.cm.tab10(np.linspace(0, 1, self.num_vehicles))
-        
-        # 创建车辆
-        for i in range(self.num_vehicles):
-            config = {
-                'current_location': positions[i],
-                'max_capacity': 50,
-                'max_speed': random.uniform(5.0, 8.0),
-                'min_hardness': 2.5,
-                'turning_radius': 10.0,
-                'base_location': (100, 100)
-            }
-            
-            vehicle = MiningVehicle(
-                vehicle_id=i+1,
-                map_service=self.map_service,
-                config=config
-            )
-            
-            # 添加颜色属性
-            vehicle.color = colors[i]
-            
-            # 确保必要属性存在
-            if not hasattr(vehicle, 'current_path'):
-                vehicle.current_path = []
-            if not hasattr(vehicle, 'path_index'):
-                vehicle.path_index = 0
-            
-            vehicles.append(vehicle)
-            
-        logging.info(f"创建了 {len(vehicles)} 辆测试车辆")
-        return vehicles
+    def is_obstacle(self, point):
+        """Check if point is an obstacle"""
+        x, y = int(point[0]), int(point[1])
+        if 0 <= x < self.width and 0 <= y < self.height:
+            return self.grid[x, y] == 1
+        return True  # Out of bounds is considered obstacle
     
-    def _create_test_points(self) -> Dict[str, Tuple[float, float]]:
-        """创建测试点位置"""
-        # 关键固定点位
-        points = {
-            "中心": (self.map_size // 2, self.map_size // 2),
-            "左上": (30, self.map_size - 30),
-            "右上": (self.map_size - 30, self.map_size - 30),
-            "左下": (30, 30),
-            "右下": (self.map_size - 30, 30),
-        }
-        
-        # 添加随机测试点
-        for i in range(1, self.num_test_points - 5 + 1):
-            valid_point = False
-            attempts = 0
-            while not valid_point and attempts < 20:
-                attempts += 1
-                x = random.randint(30, self.map_size - 30)
-                y = random.randint(30, self.map_size - 30)
-                
-                # 确保点不是障碍物且离其他点有一定距离
-                if not self._is_obstacle_area(x, y):
-                    # 检查与其他点的距离
-                    min_dist = min(
-                        [math.dist((x, y), p) for p in points.values()],
-                        default=float('inf')
-                    )
-                    if min_dist > 30:  # 最小距离阈值
-                        valid_point = True
-                        points[f"测试点{i}"] = (x, y)
-            
-            # 如果找不到合适点，就用随机点
-            if attempts >= 20 and f"测试点{i}" not in points:
-                points[f"测试点{i}"] = (
-                    random.randint(30, self.map_size - 30),
-                    random.randint(30, self.map_size - 30)
-                )
-        
-        logging.info(f"创建了 {len(points)} 个测试点")
-        return points
-  
-    def _is_obstacle_area(self, x, y, margin=10):
-        """检查点是否在障碍物区域（包括边缘）"""
-        # 障碍物区域
-        obstacle_areas = [
-            (80, 30, 120, 80),    # 中下方障碍物
-            (30, 80, 80, 120),    # 左中障碍物
-            (120, 80, 170, 120),  # 右中障碍物
-            (80, 120, 120, 170)   # 中上方障碍物
-        ]
-        
-        for area in obstacle_areas:
-            x_min, y_min, x_max, y_max = area
-            if (x_min - margin <= x <= x_max + margin and 
-                y_min - margin <= y <= y_max + margin):
-                return True
-                
-        # 也检查多边形障碍物
-        for polygon in self._create_polygon_obstacles():
-            if self._point_in_polygon((x, y), polygon):
-                return True
-        
-        return False
+    def create_rectangular_obstacle(self, x1, y1, x2, y2):
+        """Create rectangular obstacle"""
+        for x in range(min(x1, x2), max(x1, x2) + 1):
+            for y in range(min(y1, y2), max(y1, y2) + 1):
+                if 0 <= x < self.width and 0 <= y < self.height:
+                    self.grid[x, y] = 1
     
-    def _create_obstacles(self) -> List[Tuple[int, int]]:
-        """创建障碍物"""
-        obstacles = []
-        
-        # 矩形障碍物区域
-        obstacle_areas = [
-            (80, 30, 120, 80),    # 中下方障碍物
-            (30, 80, 80, 120),    # 左中障碍物
-            (120, 80, 170, 120),  # 右中障碍物
-            (80, 120, 120, 170)   # 中上方障碍物
-        ]
-        
-        # 生成矩形障碍点
-        for area in obstacle_areas:
-            x_min, y_min, x_max, y_max = area
-            for x in range(x_min, x_max + 1):
-                for y in range(y_min, y_max + 1):
-                    obstacles.append((x, y))
-        
-        # 添加多边形障碍物点
-        for polygon in self._create_polygon_obstacles():
-            # 找出多边形的边界框
-            x_values = [p[0] for p in polygon]
-            y_values = [p[1] for p in polygon]
-            min_x, max_x = min(x_values), max(x_values)
-            min_y, max_y = min(y_values), max(y_values)
-            
-            # 检查边界框内的每个点
-            for x in range(int(min_x), int(max_x) + 1):
-                for y in range(int(min_y), int(max_y) + 1):
-                    if self._point_in_polygon((x, y), polygon):
-                        obstacles.append((x, y))
-        
-        logging.info(f"创建了 {len(obstacles)} 个障碍点")
-        return obstacles
-    
-    def _create_polygon_obstacles(self) -> List[List[Tuple[float, float]]]:
-        """创建多边形障碍物"""
-        polygons = [
-            # 不规则多边形障碍物
-            [(10, 150), (40, 170), (50, 140), (30, 130)],  # 左上不规则形状
-            [(160, 40), (180, 60), (190, 40), (170, 20)],  # 右下不规则形状
-            
-            # 三角形障碍物
-            [(100, 140), (120, 160), (80, 160)],  # 上方三角形
-            
-            # 细长障碍物（模拟墙）
-            [(60, 50), (70, 50), (70, 100), (60, 100)]  # 垂直墙
-        ]
-        return polygons
-        
-    def _point_in_polygon(self, point, polygon) -> bool:
-        """射线法判断点是否在多边形内"""
-        x, y = point
-        n = len(polygon)
-        inside = False
-        
-        # 快速检查点是否在多边形顶点上
-        if point in polygon:
-            return True
-            
-        # 使用射线法检查
-        for i in range(n):
-            p1 = polygon[i]
-            p2 = polygon[(i+1)%n]
-            
-            # 快速分支判断，减少计算量
-            if ((p1[1] > y) != (p2[1] > y)) and (x < (p2[0]-p1[0])*(y-p1[1])/(p2[1]-p1[1]) + p1[0]):
-                inside = not inside
-                
-        return inside
-    
-    def _generate_test_pairs(self):
-        """生成测试点对"""
-        point_names = list(self.test_points.keys())
-        
-        # 确保每个点都被访问到
-        for i in range(len(point_names)):
-            next_idx = (i + 1) % len(point_names)
-            self.test_pairs.append((point_names[i], point_names[next_idx]))
-            
-        # 添加一些长距离交叉路径
-        self.test_pairs.append(("左上", "右下"))
-        self.test_pairs.append(("右上", "左下"))
-        
-        # 添加一些随机的点对
-        for _ in range(self.num_vehicles * 2):
-            start_idx = random.randint(0, len(point_names) - 1)
-            end_idx = start_idx
-            while end_idx == start_idx:
-                end_idx = random.randint(0, len(point_names) - 1)
-            self.test_pairs.append((point_names[start_idx], point_names[end_idx]))
-            
-        logging.info(f"生成了 {len(self.test_pairs)} 个测试点对")
-    
-    def setup_visualization(self):
-        """设置可视化环境"""
-        # 创建图形和布局
-        self.fig = plt.figure(figsize=(16, 10))
-        gs = gridspec.GridSpec(2, 2, width_ratios=[3, 1], height_ratios=[3, 1])
-        
-        # 主地图视图
-        self.ax_main = self.fig.add_subplot(gs[0, 0])
-        self.ax_main.set_xlim(0, self.map_size)
-        self.ax_main.set_ylim(0, self.map_size)
-        self.ax_main.set_aspect('equal')
-        self.ax_main.set_title('路径规划器测试可视化')
-        self.ax_main.set_xlabel('X坐标')
-        self.ax_main.set_ylabel('Y坐标')
-        self.ax_main.grid(True, linestyle='--', alpha=0.7)
-        
-        # 状态面板
-        self.ax_status = self.fig.add_subplot(gs[0, 1])
-        self.ax_status.set_title('系统状态')
-        self.ax_status.axis('off')
-        
-        # 调试视图
-        self.ax_debug = self.fig.add_subplot(gs[1, 0])
-        self.ax_debug.set_title('路径规划调试')
-        self.ax_debug.set_xlabel('X坐标')
-        self.ax_debug.set_ylabel('Y坐标')
-        self.ax_debug.grid(True, linestyle='--', alpha=0.7)
-        
-        # 统计面板 
-        self.ax_stats = self.fig.add_subplot(gs[1, 1])
-        self.ax_stats.set_title('性能统计')
-        self.ax_stats.axis('off')
-        
-        # 绘制背景和障碍物
-        self._draw_map_background(self.ax_main)
-        self._draw_map_background(self.ax_debug)
-        
-        # 创建车辆标记
-        self._initialize_vehicle_markers()
-        
-        # 创建调试视图元素
-        self._initialize_debug_view()
-        
-        # 创建状态文本
-        self.status_text = self.ax_status.text(
-            0.05, 0.95, '',
-            transform=self.ax_status.transAxes,
-            verticalalignment='top',
-            fontsize=10
-        )
-        
-        # 创建统计面板文本
-        self.stats_text = self.ax_stats.text(
-            0.05, 0.95, '',
-            transform=self.ax_stats.transAxes,
-            verticalalignment='top',
-            fontsize=10
-        )
-        
-        # 设置紧凑布局
-        self.fig.tight_layout()
-        
-        # 设置键盘事件处理
-        self.fig.canvas.mpl_connect('key_press_event', self._on_key_event)
-    
-    def _draw_map_background(self, ax):
-        """绘制地图背景和障碍物"""
-        # 绘制测试点
-        for name, point in self.test_points.items():
-            ax.plot(point[0], point[1], 'o', markersize=10)
-            ax.text(point[0]+5, point[1]+5, name, fontsize=8)
-        
-        # 绘制矩形障碍物区域
-        obstacle_areas = [
-            (80, 30, 120, 80),    # 中下方障碍物
-            (30, 80, 80, 120),    # 左中障碍物
-            (120, 80, 170, 120),  # 右中障碍物
-            (80, 120, 120, 170)   # 中上方障碍物
-        ]
-        
-        for area in obstacle_areas:
-            x_min, y_min, x_max, y_max = area
-            width, height = x_max - x_min, y_max - y_min
-            rect = Rectangle((x_min, y_min), width, height, 
-                            facecolor='gray', alpha=0.5)
-            ax.add_patch(rect)
-        
-        # 绘制多边形障碍物
-        for polygon_vertices in self._create_polygon_obstacles():
-            poly = Polygon(polygon_vertices, facecolor='gray', alpha=0.5)
-            ax.add_patch(poly)
-    
-    def _initialize_vehicle_markers(self):
-        """初始化车辆标记"""
-        self.vehicle_markers = []
-        self.vehicle_labels = []
-        self.vehicle_path_lines = []  # 新增一个列表存储路径线对象
-        
-        for vehicle in self.vehicles:
-            # 车辆标记
-            marker = Circle(vehicle.current_location, radius=5, 
-                        color=vehicle.color, label=f'车辆{vehicle.vehicle_id}')
-            self.ax_main.add_patch(marker)
-            self.vehicle_markers.append(marker)
-            
-            # 车辆标签
-            label = self.ax_main.text(
-                vehicle.current_location[0]+5, 
-                vehicle.current_location[1]+5, 
-                f'{vehicle.vehicle_id}', 
-                color=vehicle.color, 
-                fontweight='bold'
-            )
-            self.vehicle_labels.append(label)
-            
-            # 车辆路径
-            path_line, = self.ax_main.plot(
-                [], [], '-', 
-                color=vehicle.color, 
-                alpha=0.7, 
-                linewidth=2
-            )
-            self.vehicle_path_lines.append(path_line)  # 添加到线条列表
-        
-        # 添加图例
-        self.ax_main.legend(loc='upper right')
-    
-    def _initialize_debug_view(self):
-        """初始化调试视图元素"""
-        # A*搜索可视化
-        self.debug_elements = {
-            'open_set': self.ax_debug.scatter([], [], c='green', marker='o', s=30, alpha=0.3, label='Open Set'),
-            'closed_set': self.ax_debug.scatter([], [], c='red', marker='x', s=30, alpha=0.3, label='Closed Set'),
-            'current_path': self.ax_debug.plot([], [], 'b-', linewidth=2, alpha=0.7, label='Current Path')[0],
-            'current_node': self.ax_debug.scatter([], [], c='yellow', marker='*', s=100, label='Current Node'),
-            'start_point': self.ax_debug.scatter([], [], c='green', marker='s', s=100, label='Start'),
-            'end_point': self.ax_debug.scatter([], [], c='red', marker='s', s=100, label='Goal')
-        }
-        
-        # 添加图例
-        self.ax_debug.legend(loc='upper right')
-        
-        # 设置与主视图相同的范围
-        self.ax_debug.set_xlim(self.ax_main.get_xlim())
-        self.ax_debug.set_ylim(self.ax_main.get_ylim())
-    
-    def _on_key_event(self, event):
-        """键盘事件处理"""
-        if event.key == ' ':  # 空格键
-            self.pause = not self.pause
-            if self.pause:
-                logging.info("动画已暂停")
-            else:
-                logging.info("动画已继续")
-        elif event.key == 'p':  # 显示/隐藏路径
-            self.show_path = not self.show_path
-            logging.info(f"路径显示: {'开启' if self.show_path else '关闭'}")
-        elif event.key == '+' or event.key == '=':  # 加快速度
-            self.animation_speed = min(5.0, self.animation_speed * 1.5)
-            logging.info(f"动画速度: {self.animation_speed:.1f}x")
-        elif event.key == '-':  # 减慢速度
-            self.animation_speed = max(0.1, self.animation_speed / 1.5)
-            logging.info(f"动画速度: {self.animation_speed:.1f}x")
-        elif event.key == 'n':  # 下一步
-            if self.step_mode:
-                self.pause = False
-                self._update_frame(None)
-                self.pause = True
-                logging.info("执行一步")
-        elif event.key == 's':  # 切换步进模式
-            self.step_mode = not self.step_mode
-            if self.step_mode:
-                self.pause = True
-            logging.info(f"步进模式: {'开启' if self.step_mode else '关闭'}")
-        elif event.key == 'd':  # 切换调试视图
-            self.view_mode = "debug" if self.view_mode != "debug" else "normal"
-            logging.info(f"视图模式: {self.view_mode}")
-        elif event.key == 'h':  # 切换热图视图
-            self.view_mode = "heatmap" if self.view_mode != "heatmap" else "normal"
-            logging.info(f"视图模式: {self.view_mode}")
-        elif event.key == 'c':  # 检测冲突
-            self._check_path_conflicts()
-            logging.info("执行冲突检测")
-        elif event.key == 'r':  # 解决冲突
-            self._resolve_path_conflicts()
-            logging.info("执行冲突解决")
-    
-    def update_frame(self, frame_num):
-        """动画更新函数"""
-        if self.pause:
-            return self.vehicle_markers + self.vehicle_labels + self.vehicle_path_lines
-        
-        # 更新车辆位置和路径
-        self._update_vehicles()
-        
-        # 更新状态文本
-        self._update_status_display()
-        
-        # 更新统计信息
-        self._update_stats_display()
-        
-        # 更新调试视图
-        if self.view_mode == "debug":
-            self._update_debug_view()
-        elif self.view_mode == "heatmap":
-            self._update_heatmap_view()
-        
-        # 如果没有活动车辆，启动新测试
-        if len(self.active_vehicles) == 0 and self.current_test_idx < len(self.test_pairs):
-            self._start_new_test()
-        
-        # 修改这里：使用vehicle_path_lines而不是vehicle_paths
-        return self.vehicle_markers + self.vehicle_labels + self.vehicle_path_lines
-    
-    def _update_vehicles(self):
-        """更新车辆位置"""
-        if not self.active_vehicles:
-            return
-            
-        for vehicle in list(self.active_vehicles):
-            path = self.vehicle_paths.get(vehicle, [])
-            
-            if not path or len(path) < 2:
-                self.active_vehicles.remove(vehicle)
-                continue
-                
-            # 获取当前路径进度
-            progress = self.vehicle_path_progress.get(vehicle, 0)
-            
-            # 检查是否到达终点
-            if progress >= len(path) - 1:
-                # 车辆到达终点
-                self.active_vehicles.remove(vehicle)
-                continue
-                
-            # 更新路径进度
-            progress += self.simulation_speed * 0.1  # 根据模拟速度调整步长
-            progress = min(progress, len(path) - 1)  # 确保不超过路径长度
-            self.vehicle_path_progress[vehicle] = progress
-            
-            # 计算当前位置
-            progress_int = int(progress)
-            progress_frac = progress - progress_int
-            
-            if progress_int < len(path) - 1:
-                current = path[progress_int]
-                next_point = path[progress_int + 1]
-                
-                # 检查当前路径段是否穿过障碍物
-                if self._is_path_segment_blocked(current, next_point):
-                    # 如果路径段穿过障碍物，尝试重新规划路径
-                    new_path = self._replan_path_for_vehicle(vehicle, vehicle.current_location, path[-1])
-                    if new_path and len(new_path) > 1:
-                        self.vehicle_paths[vehicle] = new_path
-                        self.vehicle_path_progress[vehicle] = 0
-                        continue
-                
-                # 插值计算当前位置
-                vehicle.current_location = (
-                    current[0] + (next_point[0] - current[0]) * progress_frac,
-                    current[1] + (next_point[1] - current[1]) * progress_frac
-                )
-            else:
-                # 到达终点
-                vehicle.current_location = path[-1]
-        
-        # 检查是否所有车辆都完成测试
-        if not self.active_vehicles:
-            # 记录测试持续时间
-            test_duration = time.time() - self.test_stats.get('start_time', time.time())
-            self.test_stats['test_durations'].append(test_duration)
-            
-            # 移动到下一个测试
-            self.current_test_info['current_idx'] += 1
-            
-            # 更新热图
-            if self.show_heatmap:
-                self._update_heatmap_from_paths()
+    def create_circular_obstacle(self, center_x, center_y, radius):
+        """Create circular obstacle"""
+        for x in range(int(center_x - radius), int(center_x + radius) + 1):
+            for y in range(int(center_y - radius), int(center_y + radius) + 1):
+                if 0 <= x < self.width and 0 <= y < self.height:
+                    if (x - center_x)**2 + (y - center_y)**2 <= radius**2:
+                        self.grid[x, y] = 1
 
-    def _is_path_segment_blocked(self, start, end):
-        """检查路径段是否穿过障碍物"""
-        # 使用Bresenham算法获取路径段上的所有点
-        points = self._bresenham_line(start, end)
-        
-        # 检查这些点是否有障碍物
-        for point in points:
-            if self._is_obstacle(point):
-                return True
-        
-        return False
-
-    def _bresenham_line(self, start, end):
-        """Bresenham算法获取线段上的所有点"""
-        x1, y1 = int(round(start[0])), int(round(start[1]))
-        x2, y2 = int(round(end[0])), int(round(end[1]))
-        
-        points = []
-        dx = abs(x2 - x1)
-        dy = abs(y2 - y1)
-        sx = 1 if x1 < x2 else -1
-        sy = 1 if y1 < y2 else -1
-        err = dx - dy
-        
-        while True:
-            points.append((x1, y1))
-            if x1 == x2 and y1 == y2:
-                break
-            
-            e2 = 2 * err
-            if e2 > -dy:
-                err -= dy
-                x1 += sx
-            if e2 < dx:
-                err += dx
-                y1 += sy
-        
-        return points
-
-    def _is_obstacle(self, point):
-        """检查点是否为障碍物"""
-        # 转为整数坐标
-        x, y = int(round(point[0])), int(round(point[1]))
-        
-        return (x, y) in self.obstacles
-
-    def _replan_path_for_vehicle(self, vehicle, current_pos, destination):
-        """为车辆重新规划路径，避开障碍物"""
-        # 尝试使用规划器生成新路径
-        try:
-            new_path = self.planner.plan_path(current_pos, destination, vehicle)
-            if new_path and len(new_path) > 1:
-                return new_path
-        except Exception as e:
-            logging.warning(f"重规划路径失败: {str(e)}")
-        
-        # 如果规划失败，尝试更智能的备选路径
-        return self._smart_fallback_path(current_pos, destination)
-
-    def _smart_fallback_path(self, start, end):
-        """生成更智能的备选路径，确保不穿过障碍物"""
-        # 先尝试直接连接
-        if not self._is_path_segment_blocked(start, end):
-            return [start, end]
-        
-        # 如果直连被阻挡，尝试找中间点
-        # 1. 计算起点到终点的方向
+def create_test_environment():
+    """Create a complex test environment with various obstacles"""
+    env = MineEnvironment(width=200, height=200)
+    
+    # Create complex obstacles
+    # 1. Central mountains/pit
+    env.create_circular_obstacle(100, 100, 30)
+    
+    # 2. Access road barriers
+    env.create_rectangular_obstacle(50, 40, 70, 160)  # Vertical barrier
+    env.create_rectangular_obstacle(130, 40, 150, 160)  # Vertical barrier
+    env.create_rectangular_obstacle(50, 40, 150, 60)  # Horizontal barrier
+    env.create_rectangular_obstacle(50, 140, 150, 160)  # Horizontal barrier
+    
+    # 3. Some scattered small obstacles
+    for _ in range(5):
+        x = random.randint(20, 180)
+        y = random.randint(20, 180)
+        radius = random.randint(5, 10)
+        env.create_circular_obstacle(x, y, radius)
+    
+    # Add loading and unloading points
+    env.add_loading_point((30, 30))  # Bottom left loading
+    env.add_loading_point((30, 170))  # Top left loading
+    env.add_unloading_point((170, 170))  # Top right unloading
+    env.add_unloading_point((170, 30))  # Bottom right unloading
+    
+    # Create a open road around the obstacles
+    # Clear paths connecting key points
+    def clear_path(start, end, width=10):
+        """Create clear path between points"""
         dx = end[0] - start[0]
         dy = end[1] - start[1]
-        dist = math.sqrt(dx*dx + dy*dy)
+        distance = math.sqrt(dx*dx + dy*dy)
         
-        # 2. 尝试不同方向的偏移点
-        for angle_offset in [0, 45, -45, 90, -90, 135, -135, 180]:
-            # 转换为弧度
-            angle = math.atan2(dy, dx) + math.radians(angle_offset)
-            # 计算偏移距离 (与原始距离相关)
-            offset_dist = dist * 0.5  # 使用原始距离的一半
-            
-            # 计算中间点
-            mid_x = start[0] + math.cos(angle) * offset_dist
-            mid_y = start[1] + math.sin(angle) * offset_dist
-            mid_point = (mid_x, mid_y)
-            
-            # 检查路径段是否可行
-            if (not self._is_path_segment_blocked(start, mid_point) and 
-                not self._is_path_segment_blocked(mid_point, end) and
-                not self._is_obstacle(mid_point)):
-                return [start, mid_point, end]
-        
-        # 如果所有常规方向都不行，尝试使用多个中间点
-        # 这里使用四个点，形成一个绕行路径
-        mid_points = []
-        angles = [45, 135, -135, -45]  # 大致形成一个矩形路径
-        
-        for angle_offset in angles:
-            angle = math.radians(angle_offset)
-            # 使用较大偏移确保绕开障碍物
-            offset_dist = dist * 0.7
-            
-            mid_x = start[0] + math.cos(angle) * offset_dist
-            mid_y = start[1] + math.sin(angle) * offset_dist
-            mid_point = (mid_x, mid_y)
-            
-            # 确保中间点不是障碍物
-            if not self._is_obstacle(mid_point):
-                mid_points.append(mid_point)
-        
-        if mid_points:
-            # 构建完整路径 [起点, 中间点1, 中间点2, ..., 终点]
-            path = [start] + mid_points + [end]
-            
-            # 检查新路径中每段是否有障碍物，移除导致障碍的点
-            valid_path = [start]
-            for i in range(1, len(path)):
-                if not self._is_path_segment_blocked(valid_path[-1], path[i]):
-                    valid_path.append(path[i])
-            
-            # 确保终点在路径中
-            if valid_path[-1] != end:
-                valid_path.append(end)
-            
-            return valid_path
-        
-        # 最后手段：随机尝试多个中间点
-        for _ in range(10):  # 尝试10次
-            # 随机偏移
-            mid_x = start[0] + random.uniform(-dist, dist)
-            mid_y = start[1] + random.uniform(-dist, dist)
-            mid_point = (mid_x, mid_y)
-            
-            if (not self._is_obstacle(mid_point) and
-                not self._is_path_segment_blocked(start, mid_point) and
-                not self._is_path_segment_blocked(mid_point, end)):
-                return [start, mid_point, end]
-        
-        # 实在找不到路径，返回直连路径，但记录警告
-        logging.warning(f"无法找到避开障碍物的路径: {start} -> {end}")
-        return [start, end]
-    
-    def _update_status_display(self):
-        """更新状态显示"""
-        active_count = len(self.active_vehicles)
-        completed_tests = self.current_test_idx
-        total_tests = len(self.test_pairs)
-        
-        # 状态信息
-        status_text = [
-            f"测试状态:",
-            f"活动车辆: {active_count}/{self.num_vehicles}",
-            f"完成测试: {completed_tests}/{total_tests} ({completed_tests/total_tests*100:.1f}%)",
-            f"动画速度: {self.animation_speed:.1f}x",
-            f"视图模式: {self.view_mode}",
-            f"步进模式: {'开启' if self.step_mode else '关闭'}",
-            f"路径显示: {'开启' if self.show_path else '关闭'}",
-            f"\n当前活动:",
-        ]
-        
-        # 添加活动车辆信息
-        for vehicle in self.active_vehicles:
-            task_info = f"{vehicle.current_task.task_id}" if hasattr(vehicle, 'current_task') and vehicle.current_task else "无任务"
-            progress = self.vehicle_path_progress.get(vehicle, 0)
-            path_len = len(self.vehicle_paths.get(vehicle, []))
-            if path_len > 0:
-                progress_pct = min(100, progress / path_len * 100)
-            else:
-                progress_pct = 0
-                
-            status_text.append(
-                f"车辆{vehicle.vehicle_id}: {task_info} - 进度: {progress}/{path_len} ({progress_pct:.1f}%)"
-            )
-        
-        # 更新状态文本
-        self.status_text.set_text('\n'.join(status_text))
-    
-    def _update_stats_display(self):
-        """更新统计信息显示"""
-        # 计算统计数据
-        avg_planning_time = np.mean(self.stats['planning_times']) if self.stats['planning_times'] else 0
-        avg_path_length = np.mean(self.stats['path_lengths']) if self.stats['path_lengths'] else 0
-        conflict_count = len(self.stats['conflicts'])
-        total_tests = max(1, self.current_test_idx)
-        
-        # 统计信息文本
-        stats_text = [
-            f"性能统计:",
-            f"平均规划时间: {avg_planning_time:.2f}毫秒",
-            f"平均路径长度: {avg_path_length:.1f}点",
-            f"检测到的冲突: {conflict_count}个",
-            f"规划成功率: {100 * len(self.stats['path_lengths']) / total_tests:.1f}%",
-            f"\n路径规划指标:",
-            f"最短路径: {min(self.stats['path_lengths']) if self.stats['path_lengths'] else 0}点",
-            f"最长路径: {max(self.stats['path_lengths']) if self.stats['path_lengths'] else 0}点",
-            f"最快规划: {min(self.stats['planning_times']) * 1000:.2f}毫秒" if self.stats['planning_times'] else "最快规划: N/A",
-            f"最慢规划: {max(self.stats['planning_times']) * 1000:.2f}毫秒" if self.stats['planning_times'] else "最慢规划: N/A",
-        ]
-        
-        # 更新统计文本
-        self.stats_text.set_text('\n'.join(stats_text))
-
-    def _update_debug_view(self):
-        """更新调试视图，显示A*搜索过程"""
-        # 更新A*搜索可视化元素
-        if 'current_search' in self.debug_data:
-            search_data = self.debug_data['current_search']
-            
-            # 更新开放集
-            if 'open_set' in search_data and search_data['open_set']:
-                open_x = [p[0] for p in search_data['open_set']]
-                open_y = [p[1] for p in search_data['open_set']]
-                self.debug_elements['open_set'].set_offsets(np.column_stack([open_x, open_y]))
-            else:
-                self.debug_elements['open_set'].set_offsets(np.zeros((0, 2)))
-                
-            # 更新关闭集
-            if 'closed_set' in search_data and search_data['closed_set']:
-                closed_x = [p[0] for p in search_data['closed_set']]
-                closed_y = [p[1] for p in search_data['closed_set']]
-                self.debug_elements['closed_set'].set_offsets(np.column_stack([closed_x, closed_y]))
-            else:
-                self.debug_elements['closed_set'].set_offsets(np.zeros((0, 2)))
-                
-            # 更新当前路径
-            if 'current_path' in search_data and search_data['current_path']:
-                path_x = [p[0] for p in search_data['current_path']]
-                path_y = [p[1] for p in search_data['current_path']]
-                self.debug_elements['current_path'].set_data(path_x, path_y)
-            else:
-                self.debug_elements['current_path'].set_data([], [])
-                
-            # 更新当前节点
-            if 'current_node' in search_data and search_data['current_node']:
-                self.debug_elements['current_node'].set_offsets([search_data['current_node']])
-            else:
-                self.debug_elements['current_node'].set_offsets(np.zeros((0, 2)))
-                
-            # 更新起点和终点
-            if 'start' in search_data:
-                self.debug_elements['start_point'].set_offsets([search_data['start']])
-            if 'goal' in search_data:
-                self.debug_elements['end_point'].set_offsets([search_data['goal']])
-                
-        # 设置调试视图标题
-        if hasattr(self, 'current_debug_test') and self.current_debug_test:
-            start_name, end_name = self.current_debug_test
-            self.ax_debug.set_title(f'路径规划调试: {start_name} → {end_name}')
-
-    def _update_heatmap_view(self):
-        """更新热图视图，显示路径密度和冲突点"""
-        # 如果是第一次进入热图模式，需要创建热图
-        if not hasattr(self, 'heatmap_data'):
-            self.heatmap_data = np.zeros((self.map_size, self.map_size))
-            
-        # 为活动车辆的路径添加密度
-        for vehicle in self.active_vehicles:
-            if vehicle in self.vehicle_paths:
-                path = self.vehicle_paths[vehicle]
-                for x, y in path:
-                    # 确保坐标在有效范围内
-                    if 0 <= int(x) < self.map_size and 0 <= int(y) < self.map_size:
-                        self.heatmap_data[int(y), int(x)] += 0.5
-        
-        # 为冲突点添加高密度
-        for conflict in self.stats['conflicts']:
-            if 'location' in conflict:
-                x, y = conflict['location']
-                # 确保坐标在有效范围内
-                if 0 <= int(x) < self.map_size and 0 <= int(y) < self.map_size:
-                    self.heatmap_data[int(y), int(x)] += 5.0
-        
-        # 应用衰减以便路径随时间淡出
-        self.heatmap_data *= 0.99
-        
-        # 更新热图显示
-        if not hasattr(self, 'heatmap'):
-            self.heatmap = self.ax_debug.imshow(
-                self.heatmap_data, 
-                cmap='hot', 
-                interpolation='bilinear',
-                alpha=0.7,
-                extent=[0, self.map_size, 0, self.map_size],
-                origin='lower'
-            )
-            self.ax_debug.set_title('路径密度热图 (明亮区域代表高使用率)')
-        else:
-            self.heatmap.set_data(self.heatmap_data)
-
-    def _check_path_conflicts(self):
-        """检测活动车辆之间的路径冲突"""
-        # 收集当前活动的车辆路径
-        active_paths = {}
-        for vehicle in self.active_vehicles:
-            if vehicle in self.vehicle_paths:
-                # 使用字符串ID作为键以满足CBS的要求
-                active_paths[str(vehicle.vehicle_id)] = self.vehicle_paths[vehicle]
-        
-        if len(active_paths) < 2:
-            logging.info("检测冲突需要至少两条活动路径")
+        if distance < 1:
             return
             
-        # 调用CBS进行冲突检测
-        conflicts = self.cbs.find_conflicts(active_paths)
+        # Unit vector
+        dx /= distance
+        dy /= distance
         
-        # 记录冲突
-        if conflicts:
-            self.stats['conflicts'].extend(conflicts)
+        # Create path
+        for t in range(int(distance) + 1):
+            x = int(start[0] + t * dx)
+            y = int(start[1] + t * dy)
             
-            # 在主视图中标记冲突点
-            for conflict in conflicts:
-                location = conflict['location']
-                conflict_time = conflict['time']
+            # Clear area around path
+            for ox in range(-width//2, width//2 + 1):
+                for oy in range(-width//2, width//2 + 1):
+                    nx, ny = x + ox, y + oy
+                    if 0 <= nx < env.width and 0 <= ny < env.height:
+                        env.grid[nx, ny] = 0
+    
+    # Connect loading and unloading points
+    for load_point in env.loading_points:
+        for unload_point in env.unloading_points:
+            clear_path(load_point, unload_point, width=15)
+            
+    # Add more complex paths
+    waypoints = [
+        (100, 30),   # Bottom middle
+        (170, 100),  # Right middle
+        (100, 170),  # Top middle
+        (30, 100)    # Left middle
+    ]
+    
+    # Connect waypoints in sequence
+    for i in range(len(waypoints)):
+        start = waypoints[i]
+        end = waypoints[(i+1) % len(waypoints)]
+        clear_path(start, end, width=15)
+    
+    return env
+
+def test_basic_path_planning(vis_mode="save", use_enhanced_vis=True):
+    """
+    Test basic path planning for comparison
+    
+    Args:
+        vis_mode: 'save', 'show', or 'both'
+        use_enhanced_vis: Whether to use enhanced visualization
+    """
+    print("\n=== Testing Basic Path Planning ===")
+    
+    # Create environment
+    env = create_test_environment()
+    
+    # Create simple planner based on map service
+    map_service = MapService()
+    map_service.obstacle_grids = set([(x, y) for x in range(env.width) for y in range(env.height) if env.grid[x, y] == 1])
+    
+    # Create vehicles
+    env.add_vehicle(1, env.loading_points[0], env.unloading_points[0])
+    env.add_vehicle(2, env.loading_points[1], env.unloading_points[1])
+    
+    # Plan paths using basic planner
+    start_time = time.time()
+    
+    for vid, vehicle in env.vehicles.items():
+        start = vehicle['position']
+        target = vehicle['target']
+        
+        # Use map_service's plan_route method
+        route = map_service.plan_route(start[:2], target[:2])
+        
+        if route and 'path' in route:
+            # Convert to list of (x, y, theta) points
+            path = []
+            for i, point in enumerate(route['path']):
+                # Calculate theta for each point
+                if i < len(route['path']) - 1:
+                    next_point = route['path'][i+1]
+                    dx = next_point[0] - point[0]
+                    dy = next_point[1] - point[1]
+                    theta = math.atan2(dy, dx)
+                else:
+                    # Last point - use previous theta
+                    theta = path[-1][2] if path else 0
                 
-                # 创建冲突标记
-                conflict_marker = Circle(
-                    location, radius=3, 
-                    facecolor='red', edgecolor='yellow', 
-                    alpha=0.7, zorder=10
-                )
-                self.ax_main.add_patch(conflict_marker)
-                
-                # 添加冲突信息标签
-                conflict_text = self.ax_main.text(
-                    location[0] + 5, location[1] + 5,
-                    f"冲突: t={conflict_time}",
-                    color='red', fontweight='bold', fontsize=8,
-                    alpha=0.8, zorder=10
+                path.append((point[0], point[1], theta))
+            
+            vehicle['path'] = path
+            print(f"Vehicle {vid} path planned with {len(path)} points")
+        else:
+            print(f"Could not plan path for vehicle {vid}")
+    
+    planning_time = time.time() - start_time
+    print(f"Basic path planning completed in {planning_time:.2f} seconds")
+    
+    # Visualize environment
+    if HAS_MATPLOTLIB:
+        if use_enhanced_vis:
+            # Use enhanced visualization
+            visualizer = EnhancedVisualization(figsize=(12, 10))
+            fig, ax, info_panel = visualizer.setup_figure("Basic Path Planning")
+            
+            # Draw environment
+            visualizer.draw_environment(env)
+            
+            # Draw vehicles and paths
+            for vid, vehicle in env.vehicles.items():
+                # Draw vehicle
+                position = vehicle['position']
+                load_percent = (vehicle['load'] / vehicle['max_load']) * 100 if vehicle['max_load'] > 0 else 0
+                visualizer.draw_vehicle(
+                    position, 5.0, 2.5, 
+                    color=vehicle['color'], 
+                    load_percent=load_percent, 
+                    label=f"V{vid}"
                 )
                 
-                # 设置标记淡出
-                def fade_out_marker(marker, text, fade_time=5.0):
-                    """让标记随时间淡出"""
-                    start_time = time.time()
-                    
-                    def update_alpha():
-                        elapsed = time.time() - start_time
-                        if elapsed >= fade_time:
-                            # 移除标记
-                            marker.remove()
-                            text.remove()
-                            return False
-                        
-                        # 更新透明度
-                        alpha = 1.0 - (elapsed / fade_time)
-                        marker.set_alpha(alpha)
-                        text.set_alpha(alpha)
-                        return True
-                    
-                    # 创建临时定时器
-                    timer = self.fig.canvas.new_timer(interval=100)
-                    timer.add_callback(update_alpha)
-                    timer.start()
-                
-                # 启动淡出效果
-                fade_out_marker(conflict_marker, conflict_text)
+                # Draw path
+                if 'path' in vehicle and vehicle['path']:
+                    visualizer.draw_path(
+                        vehicle['path'], 
+                        color=vehicle['color'], 
+                        label=f"Vehicle {vid} Path"
+                    )
             
-            logging.info(f"检测到 {len(conflicts)} 个路径冲突")
+            # Show legend and add status info
+            visualizer.show_legend()
+            visualizer.update_info_panel({
+                "Algorithm": "Basic A* Path Planning",
+                "Planning Time": f"{planning_time:.2f} seconds",
+                "Vehicles": f"{len(env.vehicles)}",
+                "Paths": f"{sum(1 for v in env.vehicles.values() if 'path' in v and v['path'])}/{len(env.vehicles)}"
+            })
+            
+            # Save or show figure
+            if vis_mode in ["save", "both"]:
+                visualizer.save_figure("basic_path_planning.png")
+            
+            if vis_mode in ["show", "both"]:
+                plt.show()
+            else:
+                plt.close()
         else:
-            logging.info("未检测到路径冲突")
-
-    def _resolve_path_conflicts(self):
-        """使用CBS解决活动车辆之间的路径冲突"""
-        # 收集当前活动的车辆路径
-        active_paths = {}
-        for vehicle in self.active_vehicles:
-            if vehicle in self.vehicle_paths:
-                # 使用字符串ID作为键以满足CBS的要求
-                active_paths[str(vehicle.vehicle_id)] = self.vehicle_paths[vehicle]
-        
-        if len(active_paths) < 2:
-            logging.info("解决冲突需要至少两条活动路径")
-            return
+            # Use original visualization
+            fig, ax = plt.subplots(figsize=(10, 10))
             
-        # 调用CBS进行冲突解决
-        start_time = time.time()
-        resolved_paths = self.cbs.resolve_conflicts(active_paths)
-        resolution_time = time.time() - start_time
-        
-        # 记录性能数据
-        self.stats['planning_times'].append(resolution_time)
-        
-        changed_count = 0
-        if resolved_paths:
-            # 更新车辆路径
-            for vid_str, new_path in resolved_paths.items():
-                if vid_str in active_paths and new_path != active_paths[vid_str]:
-                    vid = int(vid_str)
-                    changed_count += 1
+            # Draw obstacles
+            obstacle_mask = env.grid.T == 1
+            ax.imshow(obstacle_mask, cmap='gray', alpha=0.5, extent=(0, env.width, 0, env.height), origin='lower')
+            
+            # Draw loading/unloading points
+            for i, point in enumerate(env.loading_points):
+                ax.scatter(point[0], point[1], c='green', marker='o', s=100)
+                ax.text(point[0]+5, point[1]+5, f"Loading {i+1}", fontsize=12)
+            
+            for i, point in enumerate(env.unloading_points):
+                ax.scatter(point[0], point[1], c='red', marker='s', s=100)
+                ax.text(point[0]+5, point[1]+5, f"Unloading {i+1}", fontsize=12)
+            
+            # Draw vehicles and paths
+            for vid, vehicle in env.vehicles.items():
+                position = vehicle['position']
+                color = vehicle['color']
+                
+                # Draw vehicle as a circle
+                ax.scatter(position[0], position[1], c=[color], marker='o', s=100)
+                ax.text(position[0], position[1], f"V{vid}", fontsize=12, ha='center', va='center', color='white')
+                
+                # Draw path
+                if 'path' in vehicle and vehicle['path']:
+                    path = vehicle['path']
+                    path_x = [p[0] for p in path]
+                    path_y = [p[1] for p in path]
                     
-                    # 找到对应的车辆
-                    for vehicle in self.vehicles:
-                        if vehicle.vehicle_id == vid:
-                            # 更新路径
-                            self.vehicle_paths[vehicle] = new_path
-                            # 重置路径进度
-                            self.vehicle_path_progress[vehicle] = 0
-                            break
+                    ax.plot(path_x, path_y, c=color, linestyle='-', linewidth=2, label=f"Vehicle {vid}")
             
-            logging.info(f"CBS解决了 {changed_count} 条路径冲突，耗时: {resolution_time:.3f}秒")
+            # Set axis properties
+            ax.set_xlim(0, env.width)
+            ax.set_ylim(0, env.height)
+            ax.set_title("Basic Path Planning")
+            ax.set_xlabel('X')
+            ax.set_ylabel('Y')
+            ax.grid(True, alpha=0.3)
+            
+            # Add legend
+            ax.legend(loc='upper right')
+            
+            # Save or show figure
+            if vis_mode in ["save", "both"]:
+                plt.savefig("basic_path_planning.png")
+            
+            if vis_mode in ["show", "both"]:
+                plt.show()
+            else:
+                plt.close()
+    
+    return env, planning_time
 
-    def _start_new_test(self):
-        """启动新的测试"""
-        if self.current_test_idx >= len(self.test_pairs):
-            logging.info("所有测试已完成")
-            # 显示最终统计信息
-            self._show_final_stats()
-            return
-            
-        # 获取测试点对
-        start_name, end_name = self.test_pairs[self.current_test_idx]
-        start_point = self.test_points[start_name]
-        end_point = self.test_points[end_name]
+def test_hybrid_path_planning(vis_mode="save", use_enhanced_vis=True):
+    """
+    Test hybrid path planning with vehicle kinematics
+    
+    Args:
+        vis_mode: 'save', 'show', or 'both'
+        use_enhanced_vis: Whether to use enhanced visualization
+    """
+    print("\n=== Testing Hybrid Path Planning ===")
+    
+    # Create environment
+    env = create_test_environment()
+    
+    # Create hybrid path planner
+    map_service = MapService()
+    
+    # Set obstacle grid
+    obstacle_grid = set([(x, y) for x in range(env.width) for y in range(env.height) if env.grid[x, y] == 1])
+    
+    # Create hybrid planner
+    planner = HybridPathPlanner(env)
+    planner.vehicle_length = 6.0  # Length in grid units
+    planner.vehicle_width = 3.0   # Width in grid units
+    planner.turning_radius = 8.0  # Minimum turning radius
+    planner.step_size = 0.8       # Step size for motion
+    planner.obstacle_grids = obstacle_grid
+    
+    # Create vehicles
+    env.add_vehicle(1, (env.loading_points[0][0], env.loading_points[0][1], 0), 
+                   (env.unloading_points[0][0], env.unloading_points[0][1], 0))
+    env.add_vehicle(2, (env.loading_points[1][0], env.loading_points[1][1], 0),
+                   (env.unloading_points[1][0], env.unloading_points[1][1], 0))
+    
+    # Plan paths using hybrid planner
+    start_time = time.time()
+    
+    for vid, vehicle in env.vehicles.items():
+        start = vehicle['position']
+        target = vehicle['target']
         
-        # 更新标题
-        self.ax_main.set_title(f'测试 {self.current_test_idx+1}/{len(self.test_pairs)}: {start_name} → {end_name}')
-        
-        # 保存当前测试信息用于调试视图
-        self.current_debug_test = (start_name, end_name)
-        
-        # 选择一辆空闲车辆
-        idle_vehicles = [v for v in self.vehicles if v not in self.active_vehicles]
-        if not idle_vehicles:
-            logging.info("没有空闲车辆可用，等待下一轮...")
-            return
-            
-        vehicle = random.choice(idle_vehicles)
-        
-        # 添加调试钩子以捕获A*搜索过程
-        def path_planner_hook(node, **context):
-            """A*搜索过程钩子函数"""
-            if not hasattr(self, 'debug_data'):
-                self.debug_data = {}
-                
-            if 'current_search' not in self.debug_data:
-                self.debug_data['current_search'] = {
-                    'open_set': [],
-                    'closed_set': [],
-                    'current_path': [],
-                    'current_node': None,
-                    'start': start_point,
-                    'goal': end_point
-                }
-                
-            # 更新搜索状态
-            search_data = self.debug_data['current_search']
-            
-            # 更新开放集和关闭集
-            if 'open_set' in context:
-                search_data['open_set'] = context['open_set']
-            if 'closed_set' in context:
-                search_data['closed_set'] = context['closed_set']
-                
-            # 更新当前节点和路径
-            search_data['current_node'] = node
-            if 'current_path' in context:
-                search_data['current_path'] = context['current_path']
-                
-        # 测量规划时间
-        start_time = time.time()
-        
-        # 规划路径
-        path = self.planner.plan_path(vehicle.current_location, end_point, vehicle)
-        
-        # 记录规划时间
-        planning_time = time.time() - start_time
-        self.stats['planning_times'].append(planning_time)
+        # Plan path using hybrid planner
+        path = planner.plan_path(start, target)
         
         if path and len(path) > 1:
-            # 设置车辆路径
-            self.active_vehicles.append(vehicle)
-            self.vehicle_paths[vehicle] = path
-            self.vehicle_path_progress[vehicle] = 0
-            
-            # 记录路径长度
-            self.stats['path_lengths'].append(len(path))
-            
-            logging.info(f"车辆{vehicle.vehicle_id}从{start_name}前往{end_name}，路径长度: {len(path)}，规划耗时: {planning_time:.3f}秒")
-            
-            # 增加测试索引
-            self.current_test_idx += 1
+            vehicle['path'] = path
+            print(f"Vehicle {vid} path planned with {len(path)} points")
         else:
-            logging.warning(f"车辆{vehicle.vehicle_id}无法规划到{end_name}的路径")
-            # 尝试下一个测试
-            self.current_test_idx += 1
-            self._start_new_test()
-    def _show_final_stats(self):
-        """显示最终的统计数据"""
-        # 收集统计数据
-        avg_planning_time = np.mean(self.stats['planning_times']) if self.stats['planning_times'] else 0
-        avg_path_length = np.mean(self.stats['path_lengths']) if self.stats['path_lengths'] else 0
-        total_conflicts = len(self.stats['conflicts'])
-        success_rate = len(self.stats['path_lengths']) / max(1, self.current_test_idx)
+            print(f"Could not plan path for vehicle {vid}")
+    
+    planning_time = time.time() - start_time
+    print(f"Hybrid path planning completed in {planning_time:.2f} seconds")
+    
+    # Visualize environment
+    if HAS_MATPLOTLIB:
+        if use_enhanced_vis:
+            # Use enhanced visualization
+            visualizer = EnhancedVisualization(figsize=(12, 10))
+            fig, ax, info_panel = visualizer.setup_figure("Hybrid Path Planning")
+            
+            # Draw environment
+            visualizer.draw_environment(env)
+            
+            # Draw vehicles and paths
+            for vid, vehicle in env.vehicles.items():
+                # Set vehicle color based on load
+                if vid == 1:
+                    color = [0.2, 0.6, 0.8]  # Blue
+                else:
+                    color = [0.8, 0.3, 0.3]  # Red
+                vehicle['color'] = color
+                
+                # Draw vehicle
+                position = vehicle['position']
+                visualizer.draw_vehicle(
+                    position, 
+                    planner.vehicle_length, 
+                    planner.vehicle_width, 
+                    color=color, 
+                    label=f"V{vid}"
+                )
+                
+                # Draw path with orientation indicators
+                if 'path' in vehicle and vehicle['path']:
+                    visualizer.draw_path(
+                        vehicle['path'], 
+                        color=color, 
+                        show_orientations=True, 
+                        label=f"Vehicle {vid} Path"
+                    )
+                    
+                    # Draw target point
+                    target = vehicle['target']
+                    ax.scatter(
+                        target[0], target[1], 
+                        c=[color], marker='x', s=100, 
+                        linewidth=2, zorder=15
+                    )
+            
+            # Show legend and add status info
+            visualizer.show_legend()
+            visualizer.update_info_panel({
+                "Algorithm": "Hybrid A* Path Planning",
+                "Planning Time": f"{planning_time:.2f} seconds",
+                "Turning Radius": f"{planner.turning_radius} units",
+                "Vehicle Size": f"{planner.vehicle_length}x{planner.vehicle_width}",
+                "Paths Created": f"{sum(1 for v in env.vehicles.values() if 'path' in v and v['path'])}/{len(env.vehicles)}"
+            })
+            
+            # Save or show figure
+            if vis_mode in ["save", "both"]:
+                visualizer.save_figure("hybrid_path_planning.png")
+            
+            if vis_mode in ["show", "both"]:
+                plt.show()
+            else:
+                plt.close()
+        else:
+            # Original visualization
+            fig, ax = plt.subplots(figsize=(10, 10))
+            
+            # Draw obstacles
+            obstacle_mask = env.grid.T == 1
+            ax.imshow(obstacle_mask, cmap='gray', alpha=0.5, extent=(0, env.width, 0, env.height), origin='lower')
+            
+            # Draw loading/unloading points
+            for i, point in enumerate(env.loading_points):
+                ax.scatter(point[0], point[1], c='green', marker='o', s=100)
+                ax.text(point[0]+5, point[1]+5, f"Loading {i+1}", fontsize=12)
+            
+            for i, point in enumerate(env.unloading_points):
+                ax.scatter(point[0], point[1], c='red', marker='s', s=100)
+                ax.text(point[0]+5, point[1]+5, f"Unloading {i+1}", fontsize=12)
+            
+            # Draw vehicles and paths
+            for vid, vehicle in env.vehicles.items():
+                position = vehicle['position']
+                
+                # Set vehicle color
+                if vid == 1:
+                    color = [0.2, 0.6, 0.8]  # Blue
+                else:
+                    color = [0.8, 0.3, 0.3]  # Red
+                vehicle['color'] = color
+                
+                # Draw vehicle with orientation
+                x, y, theta = position
+                
+                # Create vehicle rectangle
+                length = planner.vehicle_length
+                width = planner.vehicle_width
+                dx = length / 2
+                dy = width / 2
+                corners = [
+                    (-dx, -dy), (dx, -dy), (dx, dy), (-dx, dy), (-dx, -dy)
+                ]
+                
+                # Rotate and translate corners
+                cos_t = math.cos(theta)
+                sin_t = math.sin(theta)
+                corners_rotated = []
+                
+                for cx, cy in corners:
+                    rx = x + cx * cos_t - cy * sin_t
+                    ry = y + cx * sin_t + cy * cos_t
+                    corners_rotated.append((rx, ry))
+                
+                # Draw polygon
+                xs, ys = zip(*corners_rotated)
+                ax.fill(xs, ys, color=color, alpha=0.7)
+                
+                # Draw direction indicator
+                front_x = x + dx * 0.8 * cos_t
+                front_y = y + dx * 0.8 * sin_t
+                ax.arrow(x, y, front_x-x, front_y-y, head_width=width*0.3, head_length=length*0.2, 
+                        fc='black', ec='black', alpha=0.8)
+                
+                # Add vehicle label
+                ax.text(x, y, f"V{vid}", fontsize=10, ha='center', va='center', color='white', weight='bold')
+                
+                # Draw path
+                if 'path' in vehicle and vehicle['path']:
+                    path = vehicle['path']
+                    path_x = [p[0] for p in path]
+                    path_y = [p[1] for p in path]
+                    
+                    # Draw path line
+                    ax.plot(path_x, path_y, c=color, linestyle='-', linewidth=2, label=f"Vehicle {vid}")
+                    
+                    # Draw orientation at intervals
+                    interval = max(1, len(path) // 10)
+                    for i in range(0, len(path), interval):
+                        x, y, theta = path[i]
+                        dx = math.cos(theta) * 3
+                        dy = math.sin(theta) * 3
+                        ax.arrow(x, y, dx, dy, head_width=2, head_length=2, fc=color, ec=color, alpha=0.7)
+            
+            # Set axis properties
+            ax.set_xlim(0, env.width)
+            ax.set_ylim(0, env.height)
+            ax.set_title("Hybrid Path Planning")
+            ax.set_xlabel('X')
+            ax.set_ylabel('Y')
+            ax.grid(True, alpha=0.3)
+            
+            # Add legend
+            ax.legend(loc='upper right')
+            
+            # Save or show figure
+            if vis_mode in ["save", "both"]:
+                plt.savefig("hybrid_path_planning.png")
+            
+            if vis_mode in ["show", "both"]:
+                plt.show()
+            else:
+                plt.close()
+    
+    return env, planning_time, planner
+
+def test_path_planning_with_varying_radii(vis_mode="save", use_enhanced_vis=True):
+    """
+    Test path planning with different turning radii
+    
+    Args:
+        vis_mode: 'save', 'show', or 'both'
+        use_enhanced_vis: Whether to use enhanced visualization
+    """
+    print("\n=== Testing Path Planning with Varying Turning Radii ===")
+    
+    # Create environment
+    env = create_test_environment()
+    
+    # Create hybrid path planner
+    map_service = MapService()
+    
+    # Set obstacle grid
+    obstacle_grid = set([(x, y) for x in range(env.width) for y in range(env.height) if env.grid[x, y] == 1])
+    
+    # Define different vehicle configurations
+    vehicle_configs = [
+        {"id": 1, "length": 6.0, "width": 3.0, "turning_radius": 5.0},   # Small turning radius
+        {"id": 2, "length": 6.0, "width": 3.0, "turning_radius": 10.0},  # Medium turning radius
+        {"id": 3, "length": 6.0, "width": 3.0, "turning_radius": 15.0}   # Large turning radius
+    ]
+    
+    # Create vehicles with different start/end points
+    start_point = (50, 50, 0)
+    end_point = (150, 150, math.pi/2)  # End facing up
+    
+    # Set up environment
+    for config in vehicle_configs:
+        env.add_vehicle(config["id"], start_point, end_point)
+        env.vehicles[config["id"]]['color'] = [
+            0.2 + 0.6 * (config["id"]-1) / (len(vehicle_configs)-1),
+            0.2,
+            0.8 - 0.6 * (config["id"]-1) / (len(vehicle_configs)-1)
+        ]
+    
+    # Create base planner
+    planner = HybridPathPlanner(env)
+    planner.obstacle_grids = obstacle_grid
+    
+    # Store results for each configuration
+    results = []
+    
+    # Plan paths for different vehicle configurations
+    for config in vehicle_configs:
+        vid = config["id"]
+        vehicle = env.vehicles[vid]
         
-        # 创建统计报告
-        report = (
-            f"\n{'='*60}\n"
-            f"路径规划器测试完成\n"
-            f"{'='*60}\n"
-            f"总计测试: {self.current_test_idx}\n"
-            f"规划成功率: {success_rate*100:.1f}%\n"
-            f"平均规划时间: {avg_planning_time*1000:.2f}毫秒\n"
-            f"平均路径长度: {avg_path_length:.1f}点\n"
-            f"检测到冲突: {total_conflicts}个\n"
-            f"{'='*60}\n"
+        # Update planner with vehicle config
+        planner.vehicle_length = config["length"]
+        planner.vehicle_width = config["width"]
+        planner.turning_radius = config["turning_radius"]
+        
+        # Plan path
+        start_time = time.time()
+        path = planner.plan_path(start_point, end_point)
+        planning_time = time.time() - start_time
+        
+        if path and len(path) > 1:
+            vehicle['path'] = path
+            
+            # Calculate path metrics
+            total_length = 0
+            for i in range(1, len(path)):
+                x1, y1 = path[i-1][0], path[i-1][1]
+                x2, y2 = path[i][0], path[i][1]
+                segment_length = math.sqrt((x2-x1)**2 + (y2-y1)**2)
+                total_length += segment_length
+            
+            # Calculate path smoothness
+            angle_changes = []
+            for i in range(1, len(path) - 1):
+                p1, p2, p3 = path[i-1], path[i], path[i+1]
+                
+                # Calculate vectors
+                v1 = (p2[0] - p1[0], p2[1] - p1[1])
+                v2 = (p3[0] - p2[0], p3[1] - p2[1])
+                
+                # Calculate magnitudes
+                mag1 = math.sqrt(v1[0]**2 + v1[1]**2)
+                mag2 = math.sqrt(v2[0]**2 + v2[1]**2)
+                
+                # Skip if too short
+                if mag1 < 1e-6 or mag2 < 1e-6:
+                    continue
+                    
+                # Calculate dot product
+                dot_product = v1[0]*v2[0] + v1[1]*v2[1]
+                
+                # Calculate angle
+                cos_angle = max(-1.0, min(1.0, dot_product / (mag1 * mag2)))
+                angle = math.acos(cos_angle)
+                angle_changes.append(angle)
+            
+            avg_angle_change = sum(angle_changes) / len(angle_changes) if angle_changes else 0
+            smoothness = 1.0 - avg_angle_change / math.pi
+            
+            # Store results
+            results.append({
+                "id": vid,
+                "turning_radius": config["turning_radius"],
+                "planning_time": planning_time,
+                "path_length": len(path),
+                "total_distance": total_length,
+                "smoothness": smoothness
+            })
+            
+            print(f"Vehicle {vid} (radius={config['turning_radius']}) path: {len(path)} points, " +
+                 f"length={total_length:.1f}, smoothness={smoothness:.3f}, time={planning_time:.2f}s")
+        else:
+            print(f"Could not plan path for vehicle {vid}")
+    
+    # Visualize environment
+    if HAS_MATPLOTLIB:
+        if use_enhanced_vis:
+            # Use enhanced visualization
+            visualizer = EnhancedVisualization(figsize=(12, 10))
+            fig, ax, info_panel = visualizer.setup_figure("Path Planning with Different Turning Radii")
+            
+            # Draw environment
+            visualizer.draw_environment(env)
+            
+            # Draw vehicles and paths
+            for vid, vehicle in env.vehicles.items():
+                config = next((c for c in vehicle_configs if c["id"] == vid), None)
+                if not config:
+                    continue
+                    
+                position = vehicle['position']
+                color = vehicle['color']
+                
+                # Draw vehicle
+                vehicle_length = config["length"]
+                vehicle_width = config["width"]
+                
+                visualizer.draw_vehicle(
+                    position, 
+                    vehicle_length, 
+                    vehicle_width,
+                    color=color, 
+                    label=f"V{vid} (R={config['turning_radius']})"
+                )
+                
+                # Draw path
+                if 'path' in vehicle and vehicle['path']:
+                    path = vehicle['path']
+                    
+                    visualizer.draw_path(
+                        path, 
+                        color=color, 
+                        label=f"Vehicle {vid} (R={config['turning_radius']})",
+                        linewidth=3
+                    )
+                    
+                    # Draw start and end
+                    visualizer.ax.scatter(
+                        path[0][0], path[0][1], 
+                        c=color, marker='o', s=100, 
+                        edgecolors='black', linewidths=1,
+                        zorder=20, alpha=0.8
+                    )
+                    
+                    visualizer.ax.scatter(
+                        path[-1][0], path[-1][1], 
+                        c=color, marker='x', s=100, 
+                        linewidths=2, zorder=20
+                    )
+            
+            # Show legend
+            visualizer.show_legend(loc='upper left')
+            
+            # Add results as text
+            if results:
+                result_text = "Results:\n"
+                for r in results:
+                    result_text += f"R={r['turning_radius']}: "
+                    result_text += f"Length={r['total_distance']:.1f}, "
+                    result_text += f"Smoothness={r['smoothness']:.3f}\n"
+                
+                visualizer.info_panel.text(
+                    0.05, 0.5, result_text,
+                    fontsize=9, ha='left', va='center'
+                )
+            
+            # Save or show figure
+            if vis_mode in ["save", "both"]:
+                visualizer.save_figure("varying_turning_radii.png", dpi=150)
+            
+            if vis_mode in ["show", "both"]:
+                plt.show()
+            else:
+                plt.close()
+        else:
+            # Original visualization
+            fig, ax = plt.subplots(figsize=(10, 10))
+            
+            # Draw obstacles
+            obstacle_mask = env.grid.T == 1
+            ax.imshow(obstacle_mask, cmap='gray', alpha=0.5, extent=(0, env.width, 0, env.height), origin='lower')
+            
+            # Draw vehicles and paths
+            for vid, vehicle in env.vehicles.items():
+                config = next((c for c in vehicle_configs if c["id"] == vid), None)
+                if not config:
+                    continue
+                    
+                position = vehicle['position']
+                color = vehicle['color']
+                
+                # Draw vehicle
+                vehicle_length = config["length"]
+                vehicle_width = config["width"]
+                
+                x, y, theta = position
+                dx = vehicle_length / 2
+                dy = vehicle_width / 2
+                corners = [
+                    (-dx, -dy), (dx, -dy), (dx, dy), (-dx, dy), (-dx, -dy)
+                ]
+                
+                # Rotate and translate corners
+                cos_t = math.cos(theta)
+                sin_t = math.sin(theta)
+                corners_rotated = []
+                
+                for cx, cy in corners:
+                    rx = x + cx * cos_t - cy * sin_t
+                    ry = y + cx * sin_t + cy * cos_t
+                    corners_rotated.append((rx, ry))
+                
+                # Draw polygon
+                xs, ys = zip(*corners_rotated)
+                ax.fill(xs, ys, color=color, alpha=0.7)
+                
+                # Draw path
+                if 'path' in vehicle and vehicle['path']:
+                    path = vehicle['path']
+                    path_x = [p[0] for p in path]
+                    path_y = [p[1] for p in path]
+                    
+                    # Draw path line
+                    ax.plot(path_x, path_y, c=color, linestyle='-', linewidth=2, 
+                          label=f"Vehicle {vid} (R={config['turning_radius']})")
+                    
+                    # Draw orientation at intervals
+                    interval = max(1, len(path) // 10)
+                    for i in range(0, len(path), interval):
+                        x, y, theta = path[i]
+                        dx = math.cos(theta) * 3
+                        dy = math.sin(theta) * 3
+                        ax.arrow(x, y, dx, dy, head_width=2, head_length=2, fc=color, ec=color, alpha=0.7)
+            
+            # Set axis properties
+            ax.set_xlim(0, env.width)
+            ax.set_ylim(0, env.height)
+            ax.set_title("Path Planning with Different Turning Radii")
+            ax.set_xlabel('X')
+            ax.set_ylabel('Y')
+            ax.grid(True, alpha=0.3)
+            
+            # Add legend
+            ax.legend(loc='upper left')
+            
+            # Save or show figure
+            if vis_mode in ["save", "both"]:
+                plt.savefig("varying_turning_radii.png")
+            
+            if vis_mode in ["show", "both"]:
+                plt.show()
+            else:
+                plt.close()
+    
+    return env, planner
+
+def test_multiple_vehicles_with_cbs(vis_mode="save", use_enhanced_vis=True, animate=False):
+    """
+    Test multiple vehicles with CBS conflict resolution
+    
+    Args:
+        vis_mode: 'save', 'show', or 'both'
+        use_enhanced_vis: Whether to use enhanced visualization
+        animate: Whether to create an animation of conflict resolution
+    """
+    print("\n=== Testing Multiple Vehicles with CBS Conflict Resolution ===")
+    
+    # Create environment
+    env = create_test_environment()
+    
+    # Create hybrid path planner
+    map_service = MapService()
+    
+    # Set obstacle grid
+    obstacle_grid = set([(x, y) for x in range(env.width) for y in range(env.height) if env.grid[x, y] == 1])
+    
+    # Create hybrid planner
+    planner = HybridPathPlanner(env)
+    planner.vehicle_length = 6.0
+    planner.vehicle_width = 3.0
+    planner.turning_radius = 8.0
+    planner.step_size = 0.8
+    planner.obstacle_grids = obstacle_grid
+    
+    # Create CBS algorithm
+    cbs = ConflictBasedSearch(planner)
+    
+    # Create multiple vehicles with crossing paths
+    env.add_vehicle(1, (30, 30, 0), (170, 170, 0))      # Bottom-left to top-right
+    env.add_vehicle(2, (30, 170, -math.pi/2), (170, 30, 0))  # Top-left to bottom-right
+    env.add_vehicle(3, (100, 30, math.pi/2), (100, 170, math.pi/2))  # Bottom-center to top-center
+    
+    # Set distinct colors for vehicles
+    env.vehicles[1]['color'] = [0.8, 0.2, 0.2]  # Red
+    env.vehicles[2]['color'] = [0.2, 0.6, 0.8]  # Blue
+    env.vehicles[3]['color'] = [0.2, 0.8, 0.2]  # Green
+    
+    # Initialize visualizer for animation
+    if HAS_MATPLOTLIB and animate and use_enhanced_vis:
+        visualizer = EnhancedVisualization(figsize=(12, 10))
+        fig, ax, info_panel = visualizer.setup_figure(
+            "Multiple Vehicles with CBS Conflict Resolution", 
+            interactive=True
         )
         
-        # 显示对话框
-        from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
-        from matplotlib.figure import Figure
-        import tkinter as tk
-        from tkinter import messagebox
+        # Draw environment
+        visualizer.draw_environment(env)
         
-        # 显示结果
-        messagebox.showinfo("测试完成", report)
+        # Show initial state
+        for vid, vehicle in env.vehicles.items():
+            position = vehicle['position']
+            visualizer.draw_vehicle(
+                position,
+                planner.vehicle_length,
+                planner.vehicle_width,
+                color=vehicle['color'],
+                label=f"V{vid}"
+            )
         
-        # 更新主图标题
-        self.ax_main.set_title(f'路径规划测试完成 - 成功率: {success_rate*100:.1f}%')
-
-    def run_visualization(self):
-        """运行可视化"""
-        # 创建动画
-        ani = animation.FuncAnimation(
-            self.fig, self.update_frame, 
-            interval=int(100 / self.animation_speed),
-            blit=True,
-            cache_frame_data=False
-
-        )
+        visualizer.update_info_panel({
+            "Status": "Planning initial paths...",
+            "Vehicles": f"{len(env.vehicles)}",
+            "Conflicts": "Detecting...",
+            "CBS": "Not started"
+        })
         
-        # 显示图形
-        plt.tight_layout()
-        plt.show()
+        visualizer.update_and_pause(0.5)
         
-        return ani
+        if animate:
+            visualizer.add_animation_frame()
+    
+    # Plan initial paths without conflict resolution
+    print("Planning initial paths...")
+    vehicle_paths = {}
+    for vid, vehicle in env.vehicles.items():
+        start = vehicle['position']
+        target = vehicle['target']
+        
+        # Plan path using hybrid planner
+        path = planner.plan_path(start, target)
+        
+        if path and len(path) > 1:
+            vehicle['path'] = path
+            vehicle_paths[str(vid)] = path
+            print(f"Vehicle {vid} path planned with {len(path)} points")
+        else:
+            print(f"Could not plan path for vehicle {vid}")
+    
+    # Update animation if enabled
+    if HAS_MATPLOTLIB and animate and use_enhanced_vis:
+        # Draw paths
+        for vid, vehicle in env.vehicles.items():
+            if 'path' in vehicle and vehicle['path']:
+                visualizer.draw_path(
+                    vehicle['path'],
+                    color=vehicle['color'],
+                    label=f"Vehicle {vid} Path"
+                )
+        
+        visualizer.update_info_panel({
+            "Status": "Detecting conflicts...",
+            "Vehicles": f"{len(env.vehicles)}",
+            "Conflicts": "Detecting...",
+            "CBS": "Not started"
+        })
+        
+        visualizer.update_and_pause(0.5)
+        
+        if animate:
+            visualizer.add_animation_frame()
+    
+    # Check for conflicts
+    conflicts = cbs.find_conflicts(vehicle_paths)
+    print(f"Detected {len(conflicts)} conflicts between initial paths")
+    
+    # Update animation if enabled
+    if HAS_MATPLOTLIB and animate and use_enhanced_vis and conflicts:
+        # Highlight conflicts
+        visualizer.draw_conflict_points(conflicts)
+        
+        # Update info panel
+        visualizer.update_info_panel({
+            "Status": "Conflicts detected",
+            "Vehicles": f"{len(env.vehicles)}",
+            "Conflicts": f"{len(conflicts)}",
+            "CBS": "Not started"
+        })
+        
+        visualizer.update_and_pause(1.0)
+        
+        if animate:
+            visualizer.add_animation_frame()
+    
+    # Resolve conflicts using CBS
+    if conflicts:
+        print("Resolving conflicts with CBS...")
+        
+        # Measure resolution time
+        start_time = time.time()
+        resolved_paths = cbs.resolve_conflicts(vehicle_paths)
+        resolution_time = time.time() - start_time
+        
+        # Update vehicle paths with resolved paths
+        changed_count = 0
+        for vid_str, new_path in resolved_paths.items():
+            vid = int(vid_str)
+            if vid in env.vehicles:
+                old_path = env.vehicles[vid].get('path', [])
+                if old_path != new_path:
+                    env.vehicles[vid]['path'] = new_path
+                    changed_count += 1
+        
+        print(f"CBS resolved conflicts by changing {changed_count} vehicle paths in {resolution_time:.2f} seconds")
+        
+        # Check for remaining conflicts
+        remaining_conflicts = cbs.find_conflicts(resolved_paths)
+        print(f"Remaining conflicts after resolution: {len(remaining_conflicts)}")
+        
+        # Update animation if enabled
+        if HAS_MATPLOTLIB and animate and use_enhanced_vis:
+            # Clear previous paths
+            ax.clear()
+            visualizer.draw_environment(env)
+            
+            # Draw vehicles
+            for vid, vehicle in env.vehicles.items():
+                position = vehicle['position']
+                visualizer.draw_vehicle(
+                    position,
+                    planner.vehicle_length,
+                    planner.vehicle_width,
+                    color=vehicle['color'],
+                    label=f"V{vid}"
+                )
+            
+            # Draw resolved paths
+            for vid, vehicle in env.vehicles.items():
+                if 'path' in vehicle and vehicle['path']:
+                    visualizer.draw_path(
+                        vehicle['path'],
+                        color=vehicle['color'],
+                        label=f"Vehicle {vid} Path (Resolved)"
+                    )
+            
+            # Draw any remaining conflicts
+            if remaining_conflicts:
+                visualizer.draw_conflict_points(remaining_conflicts)
+            
+            # Update info panel
+            visualizer.update_info_panel({
+                "Status": "Conflicts resolved",
+                "Vehicles": f"{len(env.vehicles)}",
+                "Initial Conflicts": f"{len(conflicts)}",
+                "Remaining Conflicts": f"{len(remaining_conflicts)}",
+                "Paths Changed": f"{changed_count}/{len(env.vehicles)}",
+                "Resolution Time": f"{resolution_time:.2f}s"
+            })
+            
+            visualizer.update_and_pause(0.5)
+            
+            if animate:
+                visualizer.add_animation_frame()
+    
+    # Visualize environment with conflict-free paths
+    if HAS_MATPLOTLIB:
+        if use_enhanced_vis:
+            # Create new visualization if we weren't animating
+            if not animate:
+                visualizer = EnhancedVisualization(figsize=(12, 10))
+                fig, ax, info_panel = visualizer.setup_figure("Multiple Vehicles with CBS Conflict Resolution")
+                
+                # Draw environment
+                visualizer.draw_environment(env)
+            
+            # Draw vehicles and paths
+            for vid, vehicle in env.vehicles.items():
+                position = vehicle['position']
+                
+                # Draw vehicle
+                visualizer.draw_vehicle(
+                    position,
+                    planner.vehicle_length,
+                    planner.vehicle_width,
+                    color=vehicle['color'],
+                    label=f"V{vid}"
+                )
+                
+                # Draw path
+                if 'path' in vehicle and vehicle['path']:
+                    path = vehicle['path']
+                    visualizer.draw_path(
+                        path, 
+                        color=vehicle['color'], 
+                        label=f"Vehicle {vid}"
+                    )
+                    
+                    # Draw target
+                    target = vehicle['target']
+                    ax.scatter(
+                        target[0], target[1], 
+                        c=[vehicle['color']], marker='x', s=100,
+                        linewidths=2, zorder=20
+                    )
+            
+            # Draw any remaining conflicts after resolution
+            if conflicts:
+                remaining_conflicts = cbs.find_conflicts({str(vid): vehicle['path'] 
+                                                        for vid, vehicle in env.vehicles.items() 
+                                                        if 'path' in vehicle})
+                
+                if remaining_conflicts:
+                    visualizer.draw_conflict_points(remaining_conflicts)
+            
+            # Update info panel with CBS stats
+            info_dict = {
+                "Algorithm": "Conflict-Based Search (CBS)",
+                "Vehicles": f"{len(env.vehicles)}",
+                "Initial Conflicts": f"{len(conflicts) if conflicts else 0}",
+            }
+            
+            if conflicts:
+                resolution_time = getattr(cbs, 'resolution_time', 'N/A') 
+                if isinstance(resolution_time, (int, float)):
+                    resolution_time = f"{resolution_time:.2f}s"
+                
+                info_dict.update({
+                    "Resolution Time": resolution_time,
+                    "Paths Changed": f"{changed_count}/{len(env.vehicles)}",
+                    "Remaining Conflicts": f"{len(remaining_conflicts) if 'remaining_conflicts' in locals() else 0}"
+                })
+            
+            visualizer.update_info_panel(info_dict)
+            
+            # Show legend
+            visualizer.show_legend(loc='upper right')
+            
+            # Save animation if created
+            if animate:
+                visualizer.create_animation("cbs_conflict_resolution.gif", fps=5)
+            
+            # Save or show figure
+            if vis_mode in ["save", "both"]:
+                visualizer.save_figure("cbs_conflict_resolution.png", dpi=150)
+            
+            if vis_mode in ["show", "both"]:
+                plt.show()
+            else:
+                plt.close()
+        else:
+            # Original visualization
+            fig, ax = plt.subplots(figsize=(12, 12))
+            
+            # Draw obstacles
+            obstacle_mask = env.grid.T == 1
+            ax.imshow(obstacle_mask, cmap='gray', alpha=0.5, extent=(0, env.width, 0, env.height), origin='lower')
+            
+            # Draw vehicles and paths
+            for vid, vehicle in env.vehicles.items():
+                position = vehicle['position']
+                color = vehicle['color']
+                
+                # Draw vehicle
+                x, y, theta = position
+                dx = planner.vehicle_length / 2
+                dy = planner.vehicle_width / 2
+                corners = [
+                    (-dx, -dy), (dx, -dy), (dx, dy), (-dx, dy), (-dx, -dy)
+                ]
+                
+                # Rotate and translate corners
+                cos_t = math.cos(theta)
+                sin_t = math.sin(theta)
+                corners_rotated = []
+                
+                for cx, cy in corners:
+                    rx = x + cx * cos_t - cy * sin_t
+                    ry = y + cx * sin_t + cy * cos_t
+                    corners_rotated.append((rx, ry))
+                
+                # Draw polygon
+                xs, ys = zip(*corners_rotated)
+                ax.fill(xs, ys, color=color, alpha=0.7)
+                
+                # Add vehicle label
+                ax.text(x, y, f"V{vid}", fontsize=10, ha='center', va='center', color='white', weight='bold')
+                
+                # Draw path
+                if 'path' in vehicle and vehicle['path']:
+                    path = vehicle['path']
+                    path_x = [p[0] for p in path]
+                    path_y = [p[1] for p in path]
+                    
+                    # Draw path line
+                    ax.plot(path_x, path_y, c=color, linestyle='-', linewidth=2, label=f"Vehicle {vid}")
+                    
+                    # Draw orientation at intervals
+                    interval = max(1, len(path) // 10)
+                    for i in range(0, len(path), interval):
+                        x, y, theta = path[i]
+                        dx = math.cos(theta) * 3
+                        dy = math.sin(theta) * 3
+                        ax.arrow(x, y, dx, dy, head_width=2, head_length=2, fc=color, ec=color, alpha=0.7)
+                
+                # Draw target
+                target = vehicle['target']
+                ax.scatter(target[0], target[1], c=color, marker='x', s=100)
+            
+            # Highlight conflict points if any
+            if conflicts:
+                remaining_conflicts = cbs.find_conflicts({str(vid): vehicle['path'] 
+                                                        for vid, vehicle in env.vehicles.items() 
+                                                        if 'path' in vehicle})
+                
+                for conflict in remaining_conflicts:
+                    # Mark conflict location
+                    location = conflict["location"]
+                    ax.scatter(location[0], location[1], c='red', marker='*', s=200, alpha=0.7)
+                    
+                    # Add conflict info
+                    time = conflict.get("time", "?")
+                    ax.text(location[0], location[1]+5, f"Conflict at t={time}", 
+                           ha='center', va='bottom', color='red', fontsize=10)
+            
+            # Set axis properties
+            ax.set_xlim(0, env.width)
+            ax.set_ylim(0, env.height)
+            ax.set_title("Multiple Vehicles with CBS Conflict Resolution")
+            ax.set_xlabel('X')
+            ax.set_ylabel('Y')
+            ax.grid(True, alpha=0.3)
+            
+            # Add legend
+            ax.legend(loc='upper right')
+            
+            # Save or show figure
+            if vis_mode in ["save", "both"]:
+                plt.savefig("cbs_conflict_resolution.png")
+            
+            if vis_mode in ["show", "both"]:
+                plt.show()
+            else:
+                plt.close()
+    
+    return env, planner, cbs
 
-if __name__ == "__main__":
-    # 命令行参数解析
+def test_path_smoothing(vis_mode="save", use_enhanced_vis=True):
+    """
+    Test path smoothing effect
+    
+    Args:
+        vis_mode: 'save', 'show', or 'both'
+        use_enhanced_vis: Whether to use enhanced visualization
+    """
+    print("\n=== Testing Path Smoothing Effect ===")
+    
+    # Create environment
+    env = create_test_environment()
+    
+    # Create hybrid path planner
+    map_service = MapService()
+    
+    # Set obstacle grid
+    obstacle_grid = set([(x, y) for x in range(env.width) for y in range(env.height) if env.grid[x, y] == 1])
+    
+    # Create hybrid planner
+    planner = HybridPathPlanner(env)
+    planner.vehicle_length = 6.0
+    planner.vehicle_width = 3.0
+    planner.turning_radius = 8.0
+    planner.obstacle_grids = obstacle_grid
+    
+    # Create test points that require complex paths
+    start_point = (30, 30, 0)
+    end_point = (170, 170, 0)
+    
+    # Create two identical vehicles
+    env.add_vehicle(1, start_point, end_point)
+    env.add_vehicle(2, start_point, end_point)
+    
+    # Use different colors
+    env.vehicles[1]['color'] = [0.8, 0.2, 0.2]  # Red for no smoothing
+    env.vehicles[2]['color'] = [0.2, 0.6, 0.8]  # Blue for smoothing
+    
+    # Plan path without smoothing
+    planner.path_smoothing = False
+    path1 = planner.plan_path(start_point, end_point)
+    
+    if path1 and len(path1) > 1:
+        env.vehicles[1]['path'] = path1
+        print(f"Path without smoothing: {len(path1)} points")
+    
+    # Plan path with smoothing
+    planner.path_smoothing = True
+    planner.smoothing_factor = 0.5
+    planner.smoothing_iterations = 10
+    path2 = planner.plan_path(start_point, end_point)
+    
+    if path2 and len(path2) > 1:
+        env.vehicles[2]['path'] = path2
+        print(f"Path with smoothing: {len(path2)} points")
+    
+    # Compute path metrics
+    def calculate_path_smoothness(path):
+        if len(path) < 3:
+            return 1.0
+        
+        angle_changes = []
+        for i in range(1, len(path) - 1):
+            prev, curr, next_p = path[i-1], path[i], path[i+1]
+            
+            # Calculate vectors
+            v1 = (curr[0] - prev[0], curr[1] - prev[1])
+            v2 = (next_p[0] - curr[0], next_p[1] - curr[1])
+            
+            # Calculate magnitudes
+            mag1 = math.sqrt(v1[0]**2 + v1[1]**2)
+            mag2 = math.sqrt(v2[0]**2 + v2[1]**2)
+            
+            if mag1 < 1e-3 or mag2 < 1e-3:
+                continue
+                
+            # Calculate dot product and angle
+            dot_product = v1[0]*v2[0] + v1[1]*v2[1]
+            cos_angle = max(-1.0, min(1.0, dot_product / (mag1 * mag2)))
+            angle = math.acos(cos_angle)
+            angle_changes.append(angle)
+        
+        if not angle_changes:
+            return 1.0
+            
+        avg_angle_change = sum(angle_changes) / len(angle_changes)
+        smoothness = 1.0 - avg_angle_change / math.pi
+        
+        return max(0.0, min(1.0, smoothness))
+    
+    # Calculate metrics for both paths
+    if path1 and path2:
+        # Calculate total path length
+        def calc_path_length(path):
+            total = 0
+            for i in range(1, len(path)):
+                dx = path[i][0] - path[i-1][0]
+                dy = path[i][1] - path[i-1][1]
+                total += math.sqrt(dx*dx + dy*dy)
+            return total
+        
+        length1 = calc_path_length(path1)
+        length2 = calc_path_length(path2)
+        
+        # Calculate smoothness
+        smoothness1 = calculate_path_smoothness(path1)
+        smoothness2 = calculate_path_smoothness(path2)
+        
+        print(f"Path metrics without smoothing: Length={length1:.1f}, Smoothness={smoothness1:.4f}")
+        print(f"Path metrics with smoothing: Length={length2:.1f}, Smoothness={smoothness2:.4f}")
+        print(f"Smoothness improvement: {(smoothness2-smoothness1)/smoothness1*100:.1f}%")
+        print(f"Length change: {(length2-length1)/length1*100:.1f}%")
+    
+    # Visualize environment
+    if HAS_MATPLOTLIB:
+        if use_enhanced_vis:
+            # Create enhanced visualization
+            visualizer = EnhancedVisualization(figsize=(14, 10))
+            fig, ax, info_panel = visualizer.setup_figure("Effect of Path Smoothing")
+            
+            # Draw environment
+            visualizer.draw_environment(env)
+            
+            # Draw start and end points with labels
+            ax.scatter(start_point[0], start_point[1], c='green', marker='o', s=120, 
+                     edgecolors='black', linewidths=1, zorder=20)
+            ax.text(start_point[0]+5, start_point[1]+5, "Start", fontsize=12, weight='bold',
+                   bbox=dict(facecolor='white', alpha=0.7, edgecolor='none', pad=2))
+            
+            ax.scatter(end_point[0], end_point[1], c='red', marker='s', s=120,
+                     edgecolors='black', linewidths=1, zorder=20)
+            ax.text(end_point[0]+5, end_point[1]+5, "End", fontsize=12, weight='bold',
+                   bbox=dict(facecolor='white', alpha=0.7, edgecolor='none', pad=2))
+            
+            # Draw paths and data
+            if path1 and path2:
+                # Draw paths
+                visualizer.draw_path(
+                    path1, 
+                    color=env.vehicles[1]['color'], 
+                    label="Without Smoothing",
+                    linewidth=3
+                )
+                
+                visualizer.draw_path(
+                    path2, 
+                    color=env.vehicles[2]['color'], 
+                    label="With Smoothing",
+                    linewidth=3
+                )
+                
+                # Draw vehicles
+                visualizer.draw_vehicle(
+                    path1[0], 
+                    planner.vehicle_length, 
+                    planner.vehicle_width, 
+                    color=env.vehicles[1]['color']
+                )
+                
+                visualizer.draw_vehicle(
+                    path2[-1], 
+                    planner.vehicle_length, 
+                    planner.vehicle_width, 
+                    color=env.vehicles[2]['color']
+                )
+                
+                # Add metrics to info panel
+                visualizer.update_info_panel({
+                    "Path Comparison": "",
+                    "Without Smoothing": f"Points: {len(path1)}, Length: {length1:.1f}",
+                    "With Smoothing": f"Points: {len(path2)}, Length: {length2:.1f}",
+                    "Smoothness (No)": f"{smoothness1:.4f}",
+                    "Smoothness (Yes)": f"{smoothness2:.4f}",
+                    "Improvement": f"{(smoothness2-smoothness1)/smoothness1*100:.1f}%"
+                })
+            
+            # Show legend
+            visualizer.show_legend(loc='upper left')
+            
+            # Save or show figure
+            if vis_mode in ["save", "both"]:
+                visualizer.save_figure("path_smoothing_effect.png", dpi=150)
+            
+            if vis_mode in ["show", "both"]:
+                plt.show()
+            else:
+                plt.close()
+            
+            # Create detail visualization - compare path curvature
+            if path1 and path2:
+                # Create new plot for curvature comparison
+                fig2, ax2 = plt.subplots(1, 2, figsize=(14, 6))
+                
+                # Function to calculate and plot curvature
+                def plot_curvature(path, ax, title, color):
+                    if len(path) < 3:
+                        return
+                    
+                    # Calculate angle changes at each point
+                    angles = []
+                    points = []
+                    
+                    for i in range(1, len(path) - 1):
+                        prev, curr, next_p = path[i-1], path[i], path[i+1]
+                        
+                        # Calculate vectors
+                        v1 = (curr[0] - prev[0], curr[1] - prev[1])
+                        v2 = (next_p[0] - curr[0], next_p[1] - curr[1])
+                        
+                        # Calculate magnitudes
+                        mag1 = math.sqrt(v1[0]**2 + v1[1]**2)
+                        mag2 = math.sqrt(v2[0]**2 + v2[1]**2)
+                        
+                        if mag1 < 1e-3 or mag2 < 1e-3:
+                            continue
+                            
+                        # Calculate dot product and angle
+                        dot_product = v1[0]*v2[0] + v1[1]*v2[1]
+                        cos_angle = max(-1.0, min(1.0, dot_product / (mag1 * mag2)))
+                        angle = math.acos(cos_angle)
+                        
+                        # Point index along path
+                        point_idx = i / (len(path) - 1)
+                        
+                        angles.append(angle)
+                        points.append(point_idx)
+                    
+                    # Plot angles
+                    ax.plot(points, angles, color=color, linewidth=2)
+                    
+                    # Plot moving average for smoother visualization
+                    window = min(5, len(angles) // 3)
+                    if window > 1 and len(angles) > window:
+                        moving_avg = []
+                        for i in range(len(angles) - window + 1):
+                            avg = sum(angles[i:i+window]) / window
+                            moving_avg.append(avg)
+                        
+                        avg_points = [points[i + window//2] for i in range(len(moving_avg))]
+                        ax.plot(avg_points, moving_avg, color=color, linewidth=3, alpha=0.7, linestyle='--')
+                    
+                    # Set labels
+                    ax.set_title(title)
+                    ax.set_xlabel("Position along path")
+                    ax.set_ylabel("Angle change (radians)")
+                    ax.grid(True, alpha=0.3)
+                
+                # Plot curvature for both paths
+                plot_curvature(path1, ax2[0], "Without Smoothing", env.vehicles[1]['color'])
+                plot_curvature(path2, ax2[1], "With Smoothing", env.vehicles[2]['color'])
+                
+                # Set common y-axis limits
+                y_min = min(ax2[0].get_ylim()[0], ax2[1].get_ylim()[0])
+                y_max = max(ax2[0].get_ylim()[1], ax2[1].get_ylim()[1])
+                ax2[0].set_ylim(y_min, y_max)
+                ax2[1].set_ylim(y_min, y_max)
+                
+                plt.tight_layout()
+                
+                # Save curvature plot
+                if vis_mode in ["save", "both"]:
+                    plt.savefig("path_smoothing_curvature.png", dpi=150)
+                
+                if vis_mode in ["show", "both"]:
+                    plt.show()
+                else:
+                    plt.close()
+        else:
+            # Original visualization
+            fig, ax = plt.subplots(figsize=(10, 10))
+            
+            # Draw obstacles
+            obstacle_mask = env.grid.T == 1
+            ax.imshow(obstacle_mask, cmap='gray', alpha=0.5, extent=(0, env.width, 0, env.height), origin='lower')
+            
+            # Draw start and end points
+            ax.scatter(start_point[0], start_point[1], c='green', marker='o', s=100, label='Start')
+            ax.scatter(end_point[0], end_point[1], c='red', marker='s', s=100, label='End')
+            
+            # Draw paths
+            if path1 and path2:
+                # Path 1 (without smoothing)
+                path1_x = [p[0] for p in path1]
+                path1_y = [p[1] for p in path1]
+                ax.plot(path1_x, path1_y, c=env.vehicles[1]['color'], linestyle='-', 
+                       linewidth=2, label="Without Smoothing")
+                
+                # Draw orientation indicators for path 1
+                interval = max(1, len(path1) // 10)
+                for i in range(0, len(path1), interval):
+                    x, y, theta = path1[i]
+                    dx = math.cos(theta) * 3
+                    dy = math.sin(theta) * 3
+                    ax.arrow(x, y, dx, dy, head_width=2, head_length=2, 
+                            fc=env.vehicles[1]['color'], ec=env.vehicles[1]['color'], alpha=0.7)
+                
+                # Path 2 (with smoothing)
+                path2_x = [p[0] for p in path2]
+                path2_y = [p[1] for p in path2]
+                ax.plot(path2_x, path2_y, c=env.vehicles[2]['color'], linestyle='-', 
+                       linewidth=2, label="With Smoothing")
+                
+                # Draw orientation indicators for path 2
+                interval = max(1, len(path2) // 10)
+                for i in range(0, len(path2), interval):
+                    x, y, theta = path2[i]
+                    dx = math.cos(theta) * 3
+                    dy = math.sin(theta) * 3
+                    ax.arrow(x, y, dx, dy, head_width=2, head_length=2, 
+                            fc=env.vehicles[2]['color'], ec=env.vehicles[2]['color'], alpha=0.7)
+            
+            # Set axis properties
+            ax.set_xlim(0, env.width)
+            ax.set_ylim(0, env.height)
+            ax.set_title("Effect of Path Smoothing")
+            ax.set_xlabel('X')
+            ax.set_ylabel('Y')
+            ax.grid(True, alpha=0.3)
+            
+            # Add legend and metrics
+            handles, labels = ax.get_legend_handles_labels()
+            
+            if path1 and path2:
+                from matplotlib.lines import Line2D
+                
+                # Add metrics to legend
+                metrics_label1 = f"No Smoothing: Points={len(path1)}, Smoothness={smoothness1:.4f}"
+                metrics_label2 = f"With Smoothing: Points={len(path2)}, Smoothness={smoothness2:.4f}"
+                
+                handles.append(Line2D([0], [0], color='white', lw=0))
+                labels.append(metrics_label1)
+                
+                handles.append(Line2D([0], [0], color='white', lw=0))
+                labels.append(metrics_label2)
+                
+                handles.append(Line2D([0], [0], color='white', lw=0))
+                labels.append(f"Improvement: {(smoothness2-smoothness1)/smoothness1*100:.1f}%")
+            
+            ax.legend(handles, labels, loc='upper right')
+            
+            # Save or show figure
+            if vis_mode in ["save", "both"]:
+                plt.savefig("path_smoothing_effect.png")
+            
+            if vis_mode in ["show", "both"]:
+                plt.show()
+            else:
+                plt.close()
+    
+    return env, planner
 
-    parser = argparse.ArgumentParser(description='路径规划器可视化测试工具')
-    parser.add_argument('--vehicles', type=int, default=5, help='车辆数量 (默认: 5)')
-    parser.add_argument('--points', type=int, default=10, help='测试点数量 (默认: 10)')
-    parser.add_argument('--size', type=int, default=200, help='地图尺寸 (默认: 200)')
-    parser.add_argument('--debug', action='store_true', help='启用调试模式')
+def test_multi_step_transport_task(vis_mode="save", use_enhanced_vis=True, animate=False):
+    """
+    Test a complete multi-step mining transport task
+    
+    Args:
+        vis_mode: 'save', 'show', or 'both'
+        use_enhanced_vis: Whether to use enhanced visualization
+        animate: Whether to create an animation of the task
+    """
+    print("\n=== Testing Complete Mining Transport Task ===")
+    
+    # Create environment
+    env = create_test_environment()
+    
+    # Create hybrid path planner
+    map_service = MapService()
+    
+    # Set obstacle grid
+    obstacle_grid = set([(x, y) for x in range(env.width) for y in range(env.height) if env.grid[x, y] == 1])
+    
+    # Create hybrid planner
+    planner = HybridPathPlanner(env)
+    planner.vehicle_length = 6.0
+    planner.vehicle_width = 3.0
+    planner.turning_radius = 8.0
+    planner.obstacle_grids = obstacle_grid
+    
+    # Define task phases
+    phases = [
+        {"name": "Empty vehicle to loading", "status": "moving_to_load", "color": [0.2, 0.2, 0.8]},
+        {"name": "Loading material", "status": "loading", "color": [0.8, 0.8, 0.2]},
+        {"name": "Loaded vehicle to unloading", "status": "moving_to_unload", "color": [0.8, 0.2, 0.2]},
+        {"name": "Unloading material", "status": "unloading", "color": [0.2, 0.8, 0.2]},
+        {"name": "Return to parking", "status": "returning", "color": [0.2, 0.2, 0.8]}
+    ]
+    
+    # Define key points
+    loading_point = env.loading_points[0]
+    unloading_point = env.unloading_points[0]
+    parking_point = (100, 15, 0)  # Bottom middle
+    
+    # Create a vehicle
+    env.add_vehicle(1, parking_point, None, status="idle")
+    
+    # Initialize visualization if matplotlib is available
+    if HAS_MATPLOTLIB and use_enhanced_vis:
+        visualizer = EnhancedVisualization(figsize=(12, 10))
+        if animate:
+            fig, ax, info_panel = visualizer.setup_figure("Mining Transport Task", interactive=True)
+        else:
+            fig, ax, info_panel = visualizer.setup_figure("Mining Transport Task")
+        
+        # Draw environment
+        visualizer.draw_environment(env)
+        
+        # Draw parking point
+        ax.scatter(parking_point[0], parking_point[1], c='blue', marker='^', s=100, zorder=20)
+        ax.text(parking_point[0]+5, parking_point[1]+5, "Parking", fontsize=12, weight='bold',
+               bbox=dict(facecolor='white', alpha=0.7, edgecolor='none', pad=2))
+    
+    # Execute each phase of the transport task
+    for phase_idx, phase in enumerate(phases):
+        print(f"\nPhase {phase_idx+1}: {phase['name']}")
+        
+        # Update vehicle status
+        env.vehicles[1]['status'] = phase['status']
+        env.vehicles[1]['color'] = phase['color']
+        
+        # Update vehicle loading status based on phase
+        if phase['status'] == 'moving_to_load' or phase['status'] == 'loading':
+            env.vehicles[1]['load'] = 0  # Empty
+        elif phase['status'] == 'moving_to_unload' or phase['status'] == 'unloading':
+            env.vehicles[1]['load'] = env.vehicles[1]['max_load']  # Full
+        elif phase['status'] == 'returning':
+            env.vehicles[1]['load'] = 0  # Empty again
+        
+        # Plan path for movement phases
+        if 'moving' in phase['status'] or phase['status'] == 'returning':
+            # Determine target
+            if phase['status'] == 'moving_to_load':
+                target = (loading_point[0], loading_point[1], 0)
+            elif phase['status'] == 'moving_to_unload':
+                target = (unloading_point[0], unloading_point[1], 0)
+            elif phase['status'] == 'returning':
+                target = parking_point
+                
+            # Plan path
+            start = env.vehicles[1]['position']
+            path = planner.plan_path(start, target)
+            
+            if path and len(path) > 1:
+                env.vehicles[1]['path'] = path
+                print(f"  Planned path with {len(path)} points from {start[:2]} to {target[:2]}")
+                
+                # Visualize if enabled
+                if HAS_MATPLOTLIB and use_enhanced_vis:
+                    # Draw path
+                    visualizer.draw_path(
+                        path, 
+                        color=phase['color'], 
+                        label=f"Phase {phase_idx+1}: {phase['name']}"
+                    )
+                    
+                    if animate:
+                        # Draw initial vehicle position
+                        visualizer.draw_vehicle(
+                            start,
+                            planner.vehicle_length,
+                            planner.vehicle_width,
+                            color=phase['color'],
+                            load_percent=(env.vehicles[1]['load'] / env.vehicles[1]['max_load']) * 100,
+                            label="V1"
+                        )
+                        
+                        # Update info panel
+                        visualizer.update_info_panel({
+                            "Phase": f"{phase_idx+1}/{len(phases)}: {phase['name']}",
+                            "Status": "Starting movement",
+                            "Load": f"{env.vehicles[1]['load']}/{env.vehicles[1]['max_load']}",
+                            "Position": f"({start[0]:.1f}, {start[1]:.1f})",
+                            "Target": f"({target[0]:.1f}, {target[1]:.1f})"
+                        })
+                        
+                        visualizer.update_and_pause(0.5)
+                        
+                        if animate:
+                            visualizer.add_animation_frame()
+                
+                # Simulate vehicle movement along path
+                steps = max(1, len(path) // 10)  # Show 10 animation steps
+                
+                for i in range(0, len(path), steps):
+                    # Update vehicle position
+                    point = path[i]
+                    env.vehicles[1]['position'] = point
+                    
+                    # Update visualization
+                    if HAS_MATPLOTLIB and use_enhanced_vis and animate:
+                        # Clear previous vehicle
+                        ax.clear()
+                        
+                        # Redraw environment
+                        visualizer.draw_environment(env)
+                        
+                        # Draw parking, loading, unloading points again
+                        ax.scatter(parking_point[0], parking_point[1], c='blue', marker='^', s=100, zorder=20)
+                        ax.text(parking_point[0]+5, parking_point[1]+5, "Parking", fontsize=12, weight='bold',
+                               bbox=dict(facecolor='white', alpha=0.7, edgecolor='none', pad=2))
+                        
+                        # Draw path
+                        visualizer.draw_path(
+                            path, 
+                            color=phase['color'], 
+                            label=f"Phase {phase_idx+1}: {phase['name']}"
+                        )
+                        
+                        # Draw vehicle at current position
+                        visualizer.draw_vehicle(
+                            point,
+                            planner.vehicle_length,
+                            planner.vehicle_width,
+                            color=phase['color'],
+                            load_percent=(env.vehicles[1]['load'] / env.vehicles[1]['max_load']) * 100,
+                            label="V1"
+                        )
+                        
+                        # Update info panel
+                        progress = (i+1) / len(path) * 100
+                        visualizer.update_info_panel({
+                            "Phase": f"{phase_idx+1}/{len(phases)}: {phase['name']}",
+                            "Status": "Moving",
+                            "Load": f"{env.vehicles[1]['load']}/{env.vehicles[1]['max_load']}",
+                            "Position": f"({point[0]:.1f}, {point[1]:.1f})",
+                            "Progress": f"{progress:.1f}%"
+                        })
+                        
+                        visualizer.update_and_pause(0.1)
+                        
+                        if animate and i % (steps * 2) == 0:  # Add fewer frames to keep file size manageable
+                            visualizer.add_animation_frame()
+                
+                # Update vehicle to final position
+                env.vehicles[1]['position'] = path[-1]
+                
+                # Final animation frame for this movement phase
+                if HAS_MATPLOTLIB and use_enhanced_vis and animate:
+                    # Clear and redraw
+                    ax.clear()
+                    visualizer.draw_environment(env)
+                    
+                    # Draw parking point
+                    ax.scatter(parking_point[0], parking_point[1], c='blue', marker='^', s=100, zorder=20)
+                    ax.text(parking_point[0]+5, parking_point[1]+5, "Parking", fontsize=12, weight='bold',
+                           bbox=dict(facecolor='white', alpha=0.7, edgecolor='none', pad=2))
+                    
+                    # Draw path
+                    visualizer.draw_path(
+                        path, 
+                        color=phase['color'], 
+                        label=f"Phase {phase_idx+1}: {phase['name']}"
+                    )
+                    
+                    # Draw vehicle at final position
+                    visualizer.draw_vehicle(
+                        path[-1],
+                        planner.vehicle_length,
+                        planner.vehicle_width,
+                        color=phase['color'],
+                        load_percent=(env.vehicles[1]['load'] / env.vehicles[1]['max_load']) * 100,
+                        label="V1"
+                    )
+                    
+                    # Update info panel
+                    visualizer.update_info_panel({
+                        "Phase": f"{phase_idx+1}/{len(phases)}: {phase['name']}",
+                        "Status": "Arrived",
+                        "Load": f"{env.vehicles[1]['load']}/{env.vehicles[1]['max_load']}",
+                        "Position": f"({path[-1][0]:.1f}, {path[-1][1]:.1f})",
+                        "Progress": "100%"
+                    })
+                    
+                    visualizer.update_and_pause(0.5)
+                    
+                    if animate:
+                        visualizer.add_animation_frame()
+            else:
+                print(f"  Path planning failed from {start[:2]} to {target[:2]}")
+                
+        elif phase['status'] == 'loading' or phase['status'] == 'unloading':
+            # Simulate loading/unloading process
+            load_steps = 5
+            if phase['status'] == 'loading':
+                start_load = 0
+                end_load = env.vehicles[1]['max_load']
+            else:  # unloading
+                start_load = env.vehicles[1]['max_load']
+                end_load = 0
+            
+            # Simulate gradual loading/unloading
+            for step in range(load_steps + 1):
+                # Calculate current load
+                current_load = start_load + (end_load - start_load) * step / load_steps
+                env.vehicles[1]['load'] = current_load
+                
+                # Visualize loading/unloading
+                if HAS_MATPLOTLIB and use_enhanced_vis and animate:
+                    # Clear and redraw
+                    ax.clear()
+                    visualizer.draw_environment(env)
+                    
+                    # Draw parking point
+                    ax.scatter(parking_point[0], parking_point[1], c='blue', marker='^', s=100, zorder=20)
+                    ax.text(parking_point[0]+5, parking_point[1]+5, "Parking", fontsize=12, weight='bold',
+                           bbox=dict(facecolor='white', alpha=0.7, edgecolor='none', pad=2))
+                    
+                    # Draw loading zone with animation effect
+                    position = env.vehicles[1]['position']
+                    if phase['status'] == 'loading':
+                        # Draw loading point with animation
+                        radius = 5 + step * 0.5  # Expanding circle effect
+                        alpha = 0.5 + step * 0.1  # Increasing opacity
+                        ax.add_patch(plt.Circle((loading_point[0], loading_point[1]), radius, 
+                                              color=[0.8, 0.8, 0.2], alpha=alpha * 0.5, zorder=10))
+                    else:  # unloading
+                        # Draw unloading point with animation
+                        radius = 5 + step * 0.5  # Expanding circle effect
+                        alpha = 0.5 + step * 0.1  # Increasing opacity
+                        ax.add_patch(plt.Circle((unloading_point[0], unloading_point[1]), radius, 
+                                              color=[0.2, 0.8, 0.2], alpha=alpha * 0.5, zorder=10))
+                    
+                    # Draw vehicle with updated load
+                    visualizer.draw_vehicle(
+                        position,
+                        planner.vehicle_length,
+                        planner.vehicle_width,
+                        color=phase['color'],
+                        load_percent=(current_load / env.vehicles[1]['max_load']) * 100,
+                        label="V1"
+                    )
+                    
+                    # Update info panel
+                    visualizer.update_info_panel({
+                        "Phase": f"{phase_idx+1}/{len(phases)}: {phase['name']}",
+                        "Status": "In Progress",
+                        "Load": f"{int(current_load)}/{env.vehicles[1]['max_load']}",
+                        "Position": f"({position[0]:.1f}, {position[1]:.1f})",
+                        "Progress": f"{step}/{load_steps} steps"
+                    })
+                    
+                    visualizer.update_and_pause(0.3)
+                    
+                    if animate:
+                        visualizer.add_animation_frame()
+            
+            print(f"  {phase['name']} completed")
+    
+    # Create final visualization
+    if HAS_MATPLOTLIB and use_enhanced_vis:
+        # If we weren't animating, we need to draw final state
+        if not animate:
+            # Draw environment
+            visualizer.draw_environment(env)
+            
+            # Draw key points
+            ax.scatter(parking_point[0], parking_point[1], c='blue', marker='^', s=100, zorder=20)
+            ax.text(parking_point[0]+5, parking_point[1]+5, "Parking", fontsize=12, weight='bold',
+                   bbox=dict(facecolor='white', alpha=0.7, edgecolor='none', pad=2))
+            
+            # Draw final vehicle position
+            visualizer.draw_vehicle(
+                env.vehicles[1]['position'],
+                planner.vehicle_length,
+                planner.vehicle_width,
+                color=[0.2, 0.2, 0.8],  # Blue for return phase
+                load_percent=0,
+                label="V1"
+            )
+        
+        # Show legend and update info panel
+        visualizer.show_legend()
+        visualizer.update_info_panel({
+            "Transport Task": "Completed",
+            "Total Phases": f"{len(phases)}",
+            "Final Status": "Returned to Parking",
+            "Position": f"({env.vehicles[1]['position'][0]:.1f}, {env.vehicles[1]['position'][1]:.1f})"
+        })
+        
+        # Save animation if created
+        if animate:
+            visualizer.create_animation("complete_transport_task.gif", fps=5)
+        
+        # Save or show figure
+        if vis_mode in ["save", "both"]:
+            visualizer.save_figure("complete_transport_task.png", dpi=150)
+        
+        if vis_mode in ["show", "both"]:
+            plt.show()
+        else:
+            plt.close()
+    
+    print("\nComplete transport task execution finished!")
+    return env, planner
+
+def main():
+    """Main function to run tests"""
+    parser = argparse.ArgumentParser(description="Test Hybrid Path Planner")
+    parser.add_argument("--test", type=str, default="all", 
+                        help="Test to run (basic, hybrid, radii, smoothing, cbs, transport, all)")
+    parser.add_argument("--vis", type=str, default="save", 
+                        help="Visualization mode (save, show, both, none)")
+    parser.add_argument("--no-vis", action="store_true", default=False,
+                        help="Disable enhanced visualization")
+    parser.add_argument("--animate", action="store_true", default=False,
+                        help="Create animations for applicable tests")
     
     args = parser.parse_args()
-    setup_chinese_font()
-    # 显示欢迎信息
-    print("=" * 70)
-    print("              路径规划器可视化测试工具")
-    print("=" * 70)
-    print("快捷键:")
-    print("  空格键 - 暂停/继续")
-    print("  + / -  - 调整速度")
-    print("  p      - 切换路径显示")
-    print("  d      - 切换调试视图")
-    print("  h      - 切换热图视图")
-    print("  c      - 检测路径冲突")
-    print("  r      - 解决路径冲突")
-    print("  s      - 切换步进模式")
-    print("  n      - 在步进模式下执行下一步")
-    print("=" * 70)
     
-    # 创建可视化器并运行
-    visualizer = PathPlannerVisualizer(
-        map_size=args.size,
-        num_vehicles=args.vehicles,
-        num_test_points=args.points,
-        debug_mode=args.debug
-    )
+    # Set up visualization parameters
+    use_enhanced_vis = not args.no_vis and HAS_MATPLOTLIB
+    vis_mode = args.vis
+    animate = args.animate and HAS_MATPLOTLIB
     
-    try:
-        # 运行可视化
-        ani = visualizer.run_visualization()
-    except KeyboardInterrupt:
-        print("\n可视化已中断")
-    except Exception as e:
-        print(f"运行时错误: {str(e)}")
-        import traceback
-        traceback.print_exc()
-    finally:
-        print("可视化结束")
+    # Determine which tests to run
+    if args.test == "basic" or args.test == "all":
+        # Test 1: Basic path planning
+        test_basic_path_planning(vis_mode=vis_mode, use_enhanced_vis=use_enhanced_vis)
+    
+    if args.test == "hybrid" or args.test == "all":
+        # Test 2: Hybrid path planning
+        test_hybrid_path_planning(vis_mode=vis_mode, use_enhanced_vis=use_enhanced_vis)
+    
+    if args.test == "radii" or args.test == "all":
+        # Test 3: Path planning with varying turning radii
+        test_path_planning_with_varying_radii(vis_mode=vis_mode, use_enhanced_vis=use_enhanced_vis)
+    
+    if args.test == "smoothing" or args.test == "all":
+        # Test 4: Path smoothing
+        test_path_smoothing(vis_mode=vis_mode, use_enhanced_vis=use_enhanced_vis)
+    
+    if args.test == "cbs" or args.test == "all":
+        # Test 5: Multiple vehicles with CBS
+        test_multiple_vehicles_with_cbs(vis_mode=vis_mode, use_enhanced_vis=use_enhanced_vis, animate=animate)
+    
+    if args.test == "transport" or args.test == "all":
+        # Test 6: Complete transport task
+        test_multi_step_transport_task(vis_mode=vis_mode, use_enhanced_vis=use_enhanced_vis, animate=animate)
+    
+    print("\nAll tests completed!")
+    
+    # Keep plots open if matplotlib is available and show mode is enabled
+    if HAS_MATPLOTLIB and vis_mode in ["show", "both"]:
+        plt.show()
+
+if __name__ == "__main__":
+    main()

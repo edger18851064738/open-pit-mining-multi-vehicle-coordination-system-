@@ -11,7 +11,7 @@ sys.path.insert(0, PROJECT_ROOT)
 
 from models.vehicle import MiningVehicle, VehicleState, TransportStage
 from models.task import TransportTask
-from algorithm.optimized_path_planner import HybridPathPlanner
+from algorithm.hybrid_path_planner import HybridPathPlanner
 from algorithm.cbs import ConflictBasedSearch
 from algorithm.map_service import MapService
 
@@ -252,7 +252,13 @@ class DispatchSystem:
     def stop_scheduling(self):
         """停止调度循环"""
         self.running = False
-
+    def safe_distance(point1, point2):
+        """安全的距离计算，确保点维度匹配"""
+        # 确保只使用x,y坐标
+        p1 = (point1[0], point1[1]) if len(point1) > 2 else point1
+        p2 = (point2[0], point2[1]) if len(point2) > 2 else point2
+        
+        return math.dist(p1, p2)
 
 if __name__ == "__main__":
     import random
